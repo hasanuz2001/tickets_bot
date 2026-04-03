@@ -168,41 +168,62 @@ function selectDate(value, label) {
 }
 
 // ───────────────────────────── TIME PICKER ───────────────────────────────────
+// Temporary state while user is picking (confirmed on button click)
+let _tmpTimeFrom = null;
+let _tmpTimeTo   = null;
+
 function openTimePicker() {
+  _tmpTimeFrom = state.timeFrom;
+  _tmpTimeTo   = state.timeTo;
   renderTimePicker();
   showScreen("screenTime");
 }
 
 function renderTimePicker() {
   const anyBtn = document.getElementById("timeAnyBtn");
-  anyBtn.classList.toggle("selected", !state.timeFrom && !state.timeTo);
+  anyBtn.classList.toggle("selected", !_tmpTimeFrom && !_tmpTimeTo);
 
-  const makeSlots = (containerId, selectedVal, onSelect) => {
-    document.getElementById(containerId).innerHTML = TIME_SLOTS.map(t =>
-      `<div class="time-slot ${t === selectedVal ? "selected" : ""}"
-            onclick="(${onSelect})('${t}')">${t}</div>`
-    ).join("");
+  const renderSlots = (containerId, selected) => {
+    const el = document.getElementById(containerId);
+    el.innerHTML = TIME_SLOTS.map(t => {
+      const cls = t === selected ? "time-slot selected" : "time-slot";
+      const fn  = containerId === "timeSlotsFrom" ? "setTimeFrom" : "setTimeTo";
+      return `<div class="${cls}" onclick="${fn}('${t}')">${t}</div>`;
+    }).join("");
   };
 
-  makeSlots("timeSlotsFrom", state.timeFrom,
-    `function(t){ state.timeFrom=t; renderTimePicker(); }`);
-  makeSlots("timeSlotsTo", state.timeTo,
-    `function(t){ state.timeTo=t; renderTimePicker(); }`);
+  renderSlots("timeSlotsFrom", _tmpTimeFrom);
+  renderSlots("timeSlotsTo",   _tmpTimeTo);
+}
+
+function setTimeFrom(t) {
+  _tmpTimeFrom = t;
+  renderTimePicker();
+}
+
+function setTimeTo(t) {
+  _tmpTimeTo = t;
+  renderTimePicker();
 }
 
 function selectTimeAny() {
+  _tmpTimeFrom = null;
+  _tmpTimeTo   = null;
   state.timeFrom = null;
   state.timeTo   = null;
+  document.getElementById("timeAnyBtn").classList.add("selected");
   setField("timeValue", "Barcha vaqt");
   state.screenStack = state.screenStack.filter(s => s !== "screenTime");
   showScreen("screenMain");
 }
 
 function confirmTime() {
-  if (state.timeFrom && state.timeTo && state.timeFrom >= state.timeTo) {
+  if (_tmpTimeFrom && _tmpTimeTo && _tmpTimeFrom >= _tmpTimeTo) {
     showToast("⚠️ 'Dan' vaqti 'Gacha' dan kichik bo'lishi kerak");
     return;
   }
+  state.timeFrom = _tmpTimeFrom;
+  state.timeTo   = _tmpTimeTo;
   const label = (state.timeFrom || state.timeTo)
     ? `${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}`
     : "Barcha vaqt";
