@@ -36,14 +36,28 @@ const DAY_NAMES   = ["Yak", "Dush", "Sesh", "Chor", "Pay", "Jum", "Shan"];
 const MONTH_NAMES = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek"];
 const CAR_ICONS   = { "Плацкарт": "🛏", "Купе": "🛏", "СВ": "⭐", "Люкс": "⭐", "Сидячий": "💺", "Общий": "🚃" };
 
+// Vaqt oralig'i uchun soatlar (05:00 dan 23:00 gacha)
+const TIME_SLOTS = ["05:00","06:00","07:00","08:00","09:00","10:00","11:00","12:00",
+                    "13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00",
+                    "21:00","22:00","23:00"];
+
+// Poyezd brend ranglari
+const BRAND_CLASS = {
+  "Afrosiyob": "brand-afrosiyob",
+  "Sharq":     "brand-sharq",
+  "Talgo":     "brand-talgo",
+  "Скорый":    "brand-express",
+  "Cкорый":    "brand-express",
+};
+
 // ───────────────────────────── STATE ─────────────────────────────────────────
 const state = {
   fromCode: null, fromName: null,
   toCode:   null, toName:   null,
   date:     null, dateLabel: null,
+  timeFrom: null, timeTo: null,   // "08:00" formatida, null = filtr yo'q
   pickerTarget: null,
   screenStack: ["screenMain"],
-  // sub id keyed by "fromCode|toCode|date"
   activeSubs: {},
 };
 
@@ -60,6 +74,7 @@ function showScreen(id) {
     screenMain:          "🚆 Chipta Qidirish",
     screenStation:       "Stansiya tanlang",
     screenDate:          "Sana tanlang",
+    screenTime:          "Vaqt oralig'i",
     screenResults:       "Natijalar",
     screenSubscriptions: "🔔 Kuzatishlarim",
   };
@@ -152,6 +167,50 @@ function selectDate(value, label) {
   showScreen("screenMain");
 }
 
+// ───────────────────────────── TIME PICKER ───────────────────────────────────
+function openTimePicker() {
+  renderTimePicker();
+  showScreen("screenTime");
+}
+
+function renderTimePicker() {
+  const anyBtn = document.getElementById("timeAnyBtn");
+  anyBtn.classList.toggle("selected", !state.timeFrom && !state.timeTo);
+
+  const makeSlots = (containerId, selectedVal, onSelect) => {
+    document.getElementById(containerId).innerHTML = TIME_SLOTS.map(t =>
+      `<div class="time-slot ${t === selectedVal ? "selected" : ""}"
+            onclick="(${onSelect})('${t}')">${t}</div>`
+    ).join("");
+  };
+
+  makeSlots("timeSlotsFrom", state.timeFrom,
+    `function(t){ state.timeFrom=t; renderTimePicker(); }`);
+  makeSlots("timeSlotsTo", state.timeTo,
+    `function(t){ state.timeTo=t; renderTimePicker(); }`);
+}
+
+function selectTimeAny() {
+  state.timeFrom = null;
+  state.timeTo   = null;
+  setField("timeValue", "Barcha vaqt");
+  state.screenStack = state.screenStack.filter(s => s !== "screenTime");
+  showScreen("screenMain");
+}
+
+function confirmTime() {
+  if (state.timeFrom && state.timeTo && state.timeFrom >= state.timeTo) {
+    showToast("⚠️ 'Dan' vaqti 'Gacha' dan kichik bo'lishi kerak");
+    return;
+  }
+  const label = (state.timeFrom || state.timeTo)
+    ? `${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}`
+    : "Barcha vaqt";
+  setField("timeValue", label);
+  state.screenStack = state.screenStack.filter(s => s !== "screenTime");
+  showScreen("screenMain");
+}
+
 // ───────────────────────────── FIELD HELPERS ─────────────────────────────────
 function setField(id, text) {
   const el = document.getElementById(id);
@@ -188,32 +247,60 @@ function renderResults(data) {
   let trains = [];
   try { trains = data.data.directions.forward.trains || []; } catch { trains = []; }
 
+  const timeInfo = (state.timeFrom || state.timeTo)
+    ? `&nbsp;⏰ ${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}`
+    : "";
   document.getElementById("resultsHeader").innerHTML = `
     <div class="route-info">
       <span>${state.fromName}</span>
       <span class="route-arrow">→</span>
       <span>${state.toName}</span>
     </div>
-    <div class="date-info">📅 ${state.dateLabel}</div>`;
+    <div class="date-info">📅 ${state.dateLabel}${timeInfo}</div>`;
 
   const subKey = subKeyOf(state.fromCode, state.toCode, state.date);
   const isWatching = !!state.activeSubs[subKey];
 
-  const availableTrains = trains.filter(t => (t.cars || []).some(c => c.freeSeats > 0));
+  // Vaqt filtri
+  const inTimeRange = (train) => {
+    if (!state.timeFrom && !state.timeTo) return true;
+    const dep = parseTime(train.departureDate || train.departureTime);
+    if (!dep) return true;
+    const from = state.timeFrom || "00:00";
+    const to   = state.timeTo   || "23:59";
+    return dep >= from && dep <= to;
+  };
+
+  const timeFilteredTrains = trains.filter(inTimeRange);
+  const availableTrains = timeFilteredTrains.filter(t => (t.cars || []).some(c => c.freeSeats > 0));
 
   let html = "";
 
-  if (!trains.length || !availableTrains.length) {
-    // No seats / no trains — show subscribe banner
+  const noTrainsAtAll  = trains.length === 0;
+  const noInTimeRange  = timeFilteredTrains.length === 0 && trains.length > 0;
+  const noSeats        = availableTrains.length === 0 && timeFilteredTrains.length > 0;
+
+  if (noTrainsAtAll || noInTimeRange || noSeats) {
+    let icon, title, msg, showWatch;
+    if (noTrainsAtAll) {
+      icon = "🚫"; title = "Poyezd topilmadi";
+      msg = "Bu sana uchun ushbu yo'nalishda poyezd mavjud emas.";
+      showWatch = false;
+    } else if (noInTimeRange) {
+      icon = "⏰"; title = "Bu vaqtda poyezd yo'q";
+      msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida poyezd topilmadi. Vaqt oralig'ini kengaytiring.`;
+      showWatch = false;
+    } else {
+      icon = "😕"; title = "Bo'sh o'rin yo'q";
+      msg = "Tanlangan vaqtda barcha vagonlarda joy band. Bot bilet chiqishi bilanoq xabar beradi.";
+      showWatch = true;
+    }
     html = `
       <div class="no-seats-banner">
-        <div class="banner-icon">${trains.length ? "😕" : "🚫"}</div>
-        <h3>${trains.length ? "Bo'sh o'rin yo'q" : "Poyezd topilmadi"}</h3>
-        <p>${trains.length
-          ? "Hozircha barcha vagonlarda joy band. Bot bilet chiqishi bilanoq sizga xabar beradi."
-          : "Bu sana uchun ushbu yo'nalishda poyezd mavjud emas."
-        }</p>
-        ${trains.length ? buildBigWatchBtn(subKey, isWatching) : ""}
+        <div class="banner-icon">${icon}</div>
+        <h3>${title}</h3>
+        <p>${msg}</p>
+        ${showWatch ? buildBigWatchBtn(subKey, isWatching) : ""}
       </div>`;
   } else {
     // Show trains with seats
@@ -232,10 +319,15 @@ function parseTime(val) {
   return s.slice(0, 5);
 }
 
+function getBrandClass(brand) {
+  return BRAND_CLASS[brand] || "brand-default";
+}
+
 function buildTrainCard(train, subKey, isWatching) {
-  const dep = parseTime(train.departureDate || train.departureTime);
-  const arr = parseTime(train.arrivalDate   || train.arrivalTime);
-  const avail  = (train.cars || []).filter(c => c.freeSeats > 0);
+  const dep   = parseTime(train.departureDate || train.departureTime);
+  const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
+  const brand = train.brand || train.type || "";
+  const avail = (train.cars || []).filter(c => c.freeSeats > 0);
 
   const seatsHtml = avail.map(car => {
     const icon  = CAR_ICONS[car.carTypeName] || "🪑";
@@ -259,7 +351,7 @@ function buildTrainCard(train, subKey, isWatching) {
           <span class="train-arr">${arr}</span>
         </div>
         <div class="train-meta">
-          <div class="train-type">${train.brand || train.type || ""}</div>
+          <div class="train-brand ${getBrandClass(brand)}">${brand || "Poyezd"}</div>
           <div class="train-num">№${train.number || ""}</div>
         </div>
       </div>
@@ -294,12 +386,14 @@ async function subscribe(subKey) {
     const res = await apiFetch("/api/subscribe", {
       method: "POST",
       body: JSON.stringify({
-        user_id:   TG_USER_ID,
-        from_code: state.fromCode,
-        to_code:   state.toCode,
-        from_name: state.fromName,
-        to_name:   state.toName,
-        date:      state.date,
+        user_id:    TG_USER_ID,
+        from_code:  state.fromCode,
+        to_code:    state.toCode,
+        from_name:  state.fromName,
+        to_name:    state.toName,
+        date:       state.date,
+        time_from:  state.timeFrom || null,
+        time_to:    state.timeTo   || null,
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
@@ -389,7 +483,7 @@ function renderSubscriptions(subs) {
         <div class="sub-icon">🚆</div>
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
-          <div class="sub-date">📅 ${s.date}</div>
+          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}</div>
           <span class="sub-status">⏳ Kuzatilmoqda (har 10 daqiqa)</span>
         </div>
         <button class="sub-delete" onclick="deleteSubFromList(${s.id},'${subKeyOf(s.from_code, s.to_code, s.date)}')" title="O'chirish">

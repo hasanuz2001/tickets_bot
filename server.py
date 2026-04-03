@@ -56,11 +56,19 @@ def init_db():
                 from_name   TEXT    NOT NULL,
                 to_name     TEXT    NOT NULL,
                 date        TEXT    NOT NULL,
+                time_from   TEXT,
+                time_to     TEXT,
                 is_active   INTEGER NOT NULL DEFAULT 1,
                 notified_at TEXT,
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        # Migration: add time columns if missing (for existing DBs)
+        try:
+            conn.execute("ALTER TABLE subscriptions ADD COLUMN time_from TEXT")
+            conn.execute("ALTER TABLE subscriptions ADD COLUMN time_to TEXT")
+        except Exception:
+            pass
         conn.commit()
     logger.info("Database initialized.")
 
@@ -105,8 +113,8 @@ def _parse_time(val) -> str:
     return s[:5]
 
 
-def extract_available(data: dict) -> list[dict]:
-    """Return list of trains that have at least one free seat."""
+def extract_available(data: dict, time_from: str = None, time_to: str = None) -> list[dict]:
+    """Return trains with free seats, optionally filtered by departure time range."""
     available = []
     try:
         trains = data["data"]["directions"]["forward"]["trains"]
@@ -114,6 +122,14 @@ def extract_available(data: dict) -> list[dict]:
         return available
 
     for train in trains:
+        dep = _parse_time(train.get("departureDate") or train.get("departureTime"))
+
+        # Vaqt filtri
+        if time_from and dep and dep < time_from:
+            continue
+        if time_to and dep and dep > time_to:
+            continue
+
         seats = []
         for car in train.get("cars", []):
             free = car.get("freeSeats", 0)
@@ -129,9 +145,9 @@ def extract_available(data: dict) -> list[dict]:
                 })
         if seats:
             available.append({
-                "dep":    _parse_time(train.get("departureDate") or train.get("departureTime")),
-                "arr":    _parse_time(train.get("arrivalDate")   or train.get("arrivalTime")),
-                "type":   train.get("brand") or train.get("type", ""),
+                "dep":    dep,
+                "arr":    _parse_time(train.get("arrivalDate") or train.get("arrivalTime")),
+                "brand":  train.get("brand") or train.get("type", ""),
                 "number": train.get("number", ""),
                 "seats":  seats,
             })
@@ -154,23 +170,25 @@ async def send_telegram_message(user_id: str, text: str):
 
 
 def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
+    time_filter = ""
+    if sub["time_from"] or sub["time_to"]:
+        time_filter = f"  ⏰ {sub['time_from'] or '00:00'} — {sub['time_to'] or '23:59'}"
+
     lines = [
         "🎫 <b>Bilet mavjud!</b>",
         "",
         f"🚆 <b>{sub['from_name']} → {sub['to_name']}</b>",
-        f"📅 {sub['date']}",
+        f"📅 {sub['date']}{time_filter}",
         "",
     ]
-    for t in trains[:3]:   # top 3 train
-        lines.append(f"🕐 <b>{t['dep']} → {t['arr']}</b>  |  {t['type']} №{t['number']}")
+    for t in trains[:3]:
+        lines.append(f"🕐 <b>{t['dep']} → {t['arr']}</b>  |  {t['brand']} №{t['number']}")
         for s in t["seats"][:2]:
             price_str = f"{int(s['price']):,} so'm" if s["price"] else "—"
             lines.append(f"  🪑 {s['type']}: <b>{s['free']} joy</b> | {price_str}")
         lines.append("")
 
-    lines += [
-        "👆 <a href='https://eticket.railway.uz'>Chipta sotib olish</a>",
-    ]
+    lines.append("👆 <a href='https://eticket.railway.uz'>Chipta sotib olish</a>")
     return "\n".join(lines)
 
 
@@ -190,7 +208,7 @@ async def check_subscriptions():
     for sub in rows:
         try:
             data     = await fetch_trains(sub["from_code"], sub["to_code"], sub["date"])
-            trains   = extract_available(data)
+            trains   = extract_available(data, sub["time_from"], sub["time_to"])
 
             if trains:
                 msg = build_notification(sub, trains)
@@ -257,6 +275,8 @@ class SubscribeRequest(BaseModel):
     from_name: str
     to_name:   str
     date:      str
+    time_from: str | None = None
+    time_to:   str | None = None
 
 
 # ── ROUTES ────────────────────────────────────────────────────────────────────
@@ -289,9 +309,11 @@ async def subscribe(req: SubscribeRequest):
             return {"status": "already_exists", "id": existing["id"]}
 
         cur = conn.execute(
-            """INSERT INTO subscriptions (user_id, from_code, to_code, from_name, to_name, date)
-               VALUES (?,?,?,?,?,?)""",
-            (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name, req.date),
+            """INSERT INTO subscriptions
+               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
+             req.date, req.time_from, req.time_to),
         )
         conn.commit()
         sub_id = cur.lastrowid

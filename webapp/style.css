@@ -472,3 +472,109 @@ body {
 .no-results-icon { font-size: 44px; margin-bottom: 10px; }
 .no-results h3 { font-size: 17px; color: var(--tg-text); margin-bottom: 6px; font-weight: 600; }
 .no-results p  { font-size: 13px; line-height: 1.6; }
+
+/* ===== TIME FIELD ===== */
+.time-icon { background: rgba(88,86,214,0.12); color: #5856d6; }
+
+/* ===== TIME PICKER ===== */
+.time-picker-wrap { display: flex; flex-direction: column; gap: 12px; }
+
+.time-any-btn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 15px 16px;
+  background: var(--tg-bg);
+  border-radius: var(--radius);
+  font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: background var(--transition);
+  border: 2px solid transparent;
+}
+.time-any-btn:active { background: var(--tg-secondary-bg); }
+.time-any-btn.selected { border-color: var(--tg-btn); background: rgba(36,129,204,0.06); }
+
+.time-picker-label {
+  font-size: 12px; font-weight: 600;
+  color: var(--tg-hint);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin: 4px 2px 0;
+}
+
+.time-range-card {
+  background: var(--tg-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.time-range-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.time-range-row:last-child { border-bottom: none; }
+
+.time-range-text {
+  display: block;
+  font-size: 11px; font-weight: 600;
+  color: var(--tg-hint);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 10px;
+}
+
+.time-slots {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+
+.time-slot {
+  padding: 7px 13px;
+  background: var(--tg-secondary-bg);
+  border-radius: 20px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all var(--transition);
+  color: var(--tg-text);
+}
+.time-slot:active { transform: scale(0.95); }
+.time-slot.selected {
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  border-color: var(--tg-btn);
+}
+
+.time-confirm-btn {
+  width: 100%;
+  padding: 14px;
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  border: none;
+  border-radius: var(--radius);
+  font-size: 15px; font-weight: 700;
+  cursor: pointer;
+  transition: opacity var(--transition);
+}
+.time-confirm-btn:active { opacity: 0.8; }
+
+/* ===== TRAIN BRAND BADGE ===== */
+.train-brand {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700;
+  padding: 3px 8px; border-radius: 20px;
+  margin-bottom: 3px;
+}
+.brand-afrosiyob { background: rgba(0,122,255,0.12); color: #007aff; }
+.brand-sharq     { background: rgba(52,199,89,0.12);  color: #34c759; }
+.brand-talgo     { background: rgba(255,45,85,0.12);   color: #ff2d55; }
+.brand-default   { background: rgba(36,129,204,0.1);   color: #2481cc; }
+.brand-express   { background: rgba(255,149,0,0.12);   color: #ff9500; }
+
+.train-time-filter {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 500;
+  color: var(--tg-hint);
+  background: var(--tg-secondary-bg);
+  padding: 2px 8px; border-radius: 10px;
+  margin-top: 3px;
+}
