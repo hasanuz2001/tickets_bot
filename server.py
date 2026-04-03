@@ -104,13 +104,19 @@ async def fetch_trains(from_code: str, to_code: str, date: str) -> dict:
 
 
 def _parse_time(val) -> str:
-    """Extract HH:MM from a datetime string like '2026-04-06T08:00:00' or '08:00'."""
+    """Extract HH:MM from various formats:
+       '2026-04-07T07:30:00', '07.04.2026 07:30:00', '07:30'
+    """
     if not val:
         return ""
-    s = str(val)
+    s = str(val).strip()
     if "T" in s:
         return s.split("T")[1][:5]
-    return s[:5]
+    if " " in s:
+        return s.split(" ")[1][:5]
+    if ":" in s:
+        return s[:5]
+    return s
 
 
 def extract_available(data: dict, time_from: str = None, time_to: str = None) -> list[dict]:

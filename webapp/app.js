@@ -335,9 +335,14 @@ function renderResults(data) {
 
 function parseTime(val) {
   if (!val) return "";
-  const s = String(val);
+  const s = String(val).trim();
+  // "2026-04-07T07:30:00"
   if (s.includes("T")) return s.split("T")[1].slice(0, 5);
-  return s.slice(0, 5);
+  // "07.04.2026 07:30:00"  or  "07.04.2026 07:30"
+  if (s.includes(" ")) return s.split(" ")[1].slice(0, 5);
+  // Already "07:30" or "07:30:00"
+  if (s.includes(":")) return s.slice(0, 5);
+  return s;
 }
 
 function getBrandClass(brand) {
