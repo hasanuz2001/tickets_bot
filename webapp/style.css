@@ -400,6 +400,21 @@ body {
   cursor: pointer; text-decoration: none;
 }
 
+/* ===== INLINE BUY BUTTON ===== */
+.inline-buy-btn {
+  padding: 4px 10px;
+  background: var(--success);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--transition);
+}
+.inline-buy-btn:active { opacity: 0.75; }
+
 /* ===== NEW SEARCH / NAV ===== */
 .new-search-btn {
   width: 100%;

@@ -358,13 +358,23 @@ function buildTrainCard(train, subKey, isWatching) {
   const seatsHtml = avail.map(car => {
     const icon  = CAR_ICONS[car.carTypeName] || "🪑";
     const price = (car.tariffs || []).map(t => t.tariff).filter(Boolean)[0];
+    const trainData = JSON.stringify({
+      number:   train.number || "",
+      brand:    brand,
+      dep:      dep,
+      arr:      arr,
+      car_type: car.carTypeName || "Vagon",
+    }).replace(/'/g, "\\'");
     return `<div class="seat-row">
       <div class="seat-type">
         <span class="seat-icon">${icon}</span>
         <span class="seat-name">${car.carTypeName || "Vagon"}</span>
         <span class="seat-count">(${car.freeSeats} joy)</span>
       </div>
-      <span class="seat-price">${price ? `${Number(price).toLocaleString()} so'm` : "—"}</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        <span class="seat-price">${price ? `${Number(price).toLocaleString()} so'm` : "—"}</span>
+        <button class="inline-buy-btn" onclick='requestBuyTicket(JSON.parse(decodeURIComponent("${encodeURIComponent(JSON.stringify({number:train.number||"",brand,dep,arr,car_type:car.carTypeName||"Vagon"}))}")))''>🎫 Olish</button>
+      </div>
     </div>`;
   }).join("");
 
@@ -382,7 +392,7 @@ function buildTrainCard(train, subKey, isWatching) {
         </div>
       </div>
       <div class="seats-list">${seatsHtml}</div>
-      <button class="buy-btn" onclick="openRailway()">🎫 Chipta sotib olish</button>
+      <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish</button>
       ${buildWatchBtn(subKey, isWatching)}
     </div>`;
 }
@@ -608,10 +618,26 @@ function resetToMain() {
 
 function openRailway() {
   const url = "https://eticket.railway.uz";
+  if (tg) tg.openLink(url);
+  else window.open(url, "_blank");
+}
+
+function requestBuyTicket(train) {
+  if (!TG_USER_ID) {
+    showToast("Iltimos, botni Telegram orqali oching.");
+    return;
+  }
+  const payload = JSON.stringify({
+    action:    "buy",
+    from_name: state.fromName,
+    to_name:   state.toName,
+    date:      state.date,
+    train,
+  });
   if (tg) {
-    tg.openLink(url);   // Dialog yo'q — to'g'ridan ochadi
+    tg.sendData(payload);  // Botga yuboradi va Mini App yopiladi
   } else {
-    window.open(url, "_blank");
+    showToast("Faqat Telegram orqali ishlaydi.");
   }
 }
 

@@ -10,11 +10,16 @@ from datetime import datetime, timedelta
 
 import httpx
 from dotenv import load_dotenv
+import json
+
+import httpx as _httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 )
+
+SERVER_URL = os.getenv("WEBAPP_URL", "http://localhost:8000")
 
 load_dotenv()
 
@@ -266,6 +271,179 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ── YO'LOVCHI MA'LUMOTI ────────────────────────────────────────────────────────
+PASS_NAME, PASS_PASSPORT, PASS_PHONE = range(20, 23)
+
+
+async def passenger_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    # Avvalgi ma'lumot bormi?
+    try:
+        async with _httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(f"{SERVER_URL}/api/passenger/{user_id}")
+            if r.status_code == 200:
+                p = r.json()
+                await update.message.reply_text(
+                    f"📋 <b>Saqlangan ma'lumotlar:</b>\n\n"
+                    f"👤 {p['full_name']}\n"
+                    f"📄 {p['passport']}\n"
+                    f"📱 {p['phone']}\n\n"
+                    "O'zgartirish uchun <b>to'liq ismingizni</b> yuboring:\n"
+                    "<i>(Bekor qilish: /cancel)</i>",
+                    parse_mode="HTML",
+                )
+            else:
+                raise Exception("not found")
+    except Exception:
+        await update.message.reply_text(
+            "👤 <b>Yo'lovchi ma'lumotlarini kiriting</b>\n\n"
+            "Bu ma'lumotlar chipta xarid qilish uchun ishlatiladi.\n\n"
+            "📝 <b>To'liq ismingizni</b> yuboring (pasportdagi kabi):\n"
+            "<i>(Bekor qilish: /cancel)</i>",
+            parse_mode="HTML",
+        )
+    return PASS_NAME
+
+
+async def passenger_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["pass_name"] = update.message.text.strip()
+    await update.message.reply_text(
+        "📄 <b>Passport raqamingizni</b> yuboring:\n"
+        "<i>Masalan: AA1234567</i>",
+        parse_mode="HTML",
+    )
+    return PASS_PASSPORT
+
+
+async def passenger_passport(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["pass_passport"] = update.message.text.strip().upper()
+    await update.message.reply_text(
+        "📱 <b>Telefon raqamingizni</b> yuboring:\n"
+        "<i>Masalan: +998901234567</i>",
+        parse_mode="HTML",
+    )
+    return PASS_PHONE
+
+
+async def passenger_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    phone = update.message.text.strip()
+    name = context.user_data.get("pass_name", "")
+    passport = context.user_data.get("pass_passport", "")
+
+    try:
+        async with _httpx.AsyncClient(timeout=8) as client:
+            r = await client.post(f"{SERVER_URL}/api/passenger", json={
+                "user_id": user_id,
+                "full_name": name,
+                "passport": passport,
+                "phone": phone,
+            })
+            r.raise_for_status()
+        await update.message.reply_text(
+            f"✅ <b>Ma'lumotlar saqlandi!</b>\n\n"
+            f"👤 {name}\n"
+            f"📄 {passport}\n"
+            f"📱 {phone}\n\n"
+            "Endi Mini App da chipta topib, <b>«🎫 Chipta olish»</b> tugmasini bosing.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xatolik: {e}")
+
+    return ConversationHandler.END
+
+
+# ── MINI APP DAN CHIPTA XARID SO'ROVI ────────────────────────────────────────
+async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mini App dan yuborilgan chipta xarid so'rovini qabul qilish."""
+    data_str = update.effective_message.web_app_data.data
+    try:
+        data = json.loads(data_str)
+    except Exception:
+        await update.message.reply_text("❌ Noto'g'ri ma'lumot.")
+        return
+
+    action = data.get("action")
+    user_id = str(update.effective_user.id)
+
+    if action == "buy":
+        # Yo'lovchi ma'lumoti bormi?
+        try:
+            async with _httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(f"{SERVER_URL}/api/passenger/{user_id}")
+                r.raise_for_status()
+                passenger = r.json()
+        except Exception:
+            await update.message.reply_text(
+                "⚠️ Avval yo'lovchi ma'lumotlarini kiriting!\n\n"
+                "/myinfo buyrug'ini yuboring.",
+                parse_mode="HTML",
+            )
+            return
+
+        train = data.get("train", {})
+
+        # Tasdiqlash so'rash
+        keyboard = [[
+            InlineKeyboardButton("✅ Ha, olish", callback_data=f"confirm_buy:{json.dumps(data)}"),
+            InlineKeyboardButton("❌ Bekor", callback_data="cancel_buy"),
+        ]]
+        await update.message.reply_text(
+            f"🎫 <b>Chipta xaridi</b>\n\n"
+            f"🚆 {data.get('from_name')} → {data.get('to_name')}\n"
+            f"📅 {data.get('date')}\n"
+            f"🕐 {train.get('dep')} → {train.get('arr')} | {train.get('brand')} №{train.get('number')}\n"
+            f"🪑 {train.get('car_type')}\n\n"
+            f"👤 {passenger['full_name']}\n"
+            f"📄 {passenger['passport']}\n\n"
+            f"⚡ Chipta olishni tasdiqlaysizmi?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+
+
+async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "cancel_buy":
+        await query.edit_message_text("❌ Bekor qilindi.")
+        return
+
+    user_id = str(update.effective_user.id)
+    data_str = query.data.replace("confirm_buy:", "", 1)
+    try:
+        data = json.loads(data_str)
+    except Exception:
+        await query.edit_message_text("❌ Xatolik.")
+        return
+
+    await query.edit_message_text("⏳ Chipta olinmoqda... Bir daqiqa kuting.")
+
+    train = data.get("train", {})
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{SERVER_URL}/api/purchase", json={
+                "user_id":      user_id,
+                "from_name":    data.get("from_name"),
+                "to_name":      data.get("to_name"),
+                "date":         data.get("date"),
+                "train_number": train.get("number"),
+                "train_brand":  train.get("brand"),
+                "dep_time":     train.get("dep"),
+                "arr_time":     train.get("arr"),
+                "car_type":     train.get("car_type"),
+            })
+            r.raise_for_status()
+        await query.edit_message_text(
+            "⏳ Chipta xaridi boshlandi!\n\n"
+            "Natija 1-2 daqiqada Telegram xabar sifatida keladi.",
+        )
+    except Exception as e:
+        await query.edit_message_text(f"❌ Xatolik: {e}")
+
+
 # --- ASOSIY ---
 async def post_init(application):
     """Bot ishga tushganda menu tugmasini o'rnatish."""
@@ -299,8 +477,22 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # Yo'lovchi ma'lumoti
+    passenger_conv = ConversationHandler(
+        entry_points=[CommandHandler("myinfo", passenger_start)],
+        states={
+            PASS_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_name)],
+            PASS_PASSPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_passport)],
+            PASS_PHONE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_phone)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
+    app.add_handler(CallbackQueryHandler(confirm_buy_callback, pattern="^confirm_buy:|^cancel_buy$"))
     app.add_handler(conv)
+    app.add_handler(passenger_conv)
 
     print("✅ Bot ishga tushdi!")
     app.run_polling()
