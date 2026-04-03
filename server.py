@@ -93,7 +93,7 @@ def init_db():
             )
         """)
         # Migrations for existing DBs
-        for col in ["time_from TEXT", "time_to TEXT"]:
+        for col in ["time_from TEXT", "time_to TEXT", "auto_buy INTEGER DEFAULT 0"]:
             try:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col}")
             except Exception:
@@ -246,26 +246,73 @@ async def check_subscriptions():
             trains   = extract_available(data, sub["time_from"], sub["time_to"])
 
             if trains:
-                # Umumiy railway login bor bo'lsa — avtomatik sahifa ochish
-                if os.getenv("RAILWAY_LOGIN") and os.getenv("RAILWAY_PASSWORD"):
-                    try:
-                        from automation import send_booking_notification
-                        await send_booking_notification(
-                            user_id   = sub["user_id"],
-                            sub       = dict(sub),
-                            train     = trains[0],
-                            bot_token = BOT_TOKEN,
+                train = trains[0]
+
+                if sub["auto_buy"] and os.getenv("RAILWAY_LOGIN") and os.getenv("RAILWAY_PASSWORD"):
+                    # ── Avtomatik xarid ──────────────────────────────
+                    logger.info(f"[auto_buy] Starting purchase for sub {sub['id']}")
+
+                    # Yo'lovchi ma'lumotini olish
+                    with get_db() as c:
+                        passenger = c.execute(
+                            "SELECT * FROM passenger_info WHERE user_id=?",
+                            (sub["user_id"],)
+                        ).fetchone()
+
+                    if passenger:
+                        try:
+                            from automation import buy_ticket
+                            result = await buy_ticket(
+                                from_name    = sub["from_name"],
+                                to_name      = sub["to_name"],
+                                date         = sub["date"],
+                                train_number = train["number"],
+                                car_type     = train["seats"][0]["type"] if train["seats"] else "",
+                                passenger    = dict(passenger),
+                            )
+                            # Natijani yuborish
+                            tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+                            seats_txt = "\n".join(
+                                f"  🪑 {s['type']}: {s['free']} joy | {int(s['price']):,} so'm"
+                                for s in train["seats"][:2] if s.get("price")
+                            )
+                            emoji = "✅" if result["status"] == "success" else "⚠️"
+                            text = (
+                                f"🤖 <b>Avtomatik xarid natijasi</b>\n\n"
+                                f"🚆 {sub['from_name']} → {sub['to_name']}\n"
+                                f"📅 {sub['date']}\n"
+                                f"🕐 {train['dep']} → {train['arr']} | {train['brand']} №{train['number']}\n"
+                                f"{seats_txt}\n\n"
+                                f"{emoji} {result['message']}"
+                            )
+                            async with httpx.AsyncClient(timeout=15) as client:
+                                if result.get("screenshot"):
+                                    await client.post(
+                                        f"{tg_url}/sendPhoto",
+                                        data={"chat_id": sub["user_id"], "caption": text, "parse_mode": "HTML"},
+                                        files={"photo": ("result.png", result["screenshot"], "image/png")},
+                                    )
+                                else:
+                                    await client.post(f"{tg_url}/sendMessage", json={
+                                        "chat_id": sub["user_id"], "text": text, "parse_mode": "HTML",
+                                    })
+                        except Exception as ae:
+                            logger.error(f"Auto-buy failed: {ae}")
+                            msg = build_notification(sub, trains)
+                            await send_telegram_message(sub["user_id"], msg)
+                    else:
+                        # Yo'lovchi ma'lumoti yo'q — oddiy notification
+                        msg = (
+                            build_notification(sub, trains) +
+                            "\n\n⚠️ Avtomatik xarid uchun /myinfo buyrug'ini yuboring!"
                         )
-                        logger.info(f"Automation notification sent for sub {sub['id']}")
-                    except Exception as ae:
-                        logger.error(f"Automation failed: {ae}, falling back to text")
-                        msg = build_notification(sub, trains)
                         await send_telegram_message(sub["user_id"], msg)
                 else:
+                    # ── Oddiy notification ───────────────────────────
                     msg = build_notification(sub, trains)
                     await send_telegram_message(sub["user_id"], msg)
 
-                logger.info(f"Notified user {sub['user_id']} for sub {sub['id']}")
+                logger.info(f"Processed sub {sub['id']} for user {sub['user_id']}")
 
                 # Deactivate after notifying — user can re-subscribe if needed
                 with get_db() as conn:
@@ -331,6 +378,7 @@ class SubscribeRequest(BaseModel):
     date:      str
     time_from: str | None = None
     time_to:   str | None = None
+    auto_buy:  bool = False
 
 
 # ── ROUTES ────────────────────────────────────────────────────────────────────
@@ -364,10 +412,10 @@ async def subscribe(req: SubscribeRequest):
 
         cur = conn.execute(
             """INSERT INTO subscriptions
-               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
-             req.date, req.time_from, req.time_to),
+             req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0),
         )
         conn.commit()
         sub_id = cur.lastrowid

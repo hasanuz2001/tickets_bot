@@ -401,23 +401,23 @@ function buildWatchBtn(subKey, isWatching) {
   if (!TG_USER_ID) return "";
   return isWatching
     ? `<button class="watch-btn watching" onclick="unsubscribe('${subKey}')">✅ Kuzatilmoqda — bekor qilish</button>`
-    : `<button class="watch-btn" onclick="subscribe('${subKey}')">🔔 Bilet chiqsa xabar ber</button>`;
+    : `<button class="watch-btn auto-buy-btn" onclick="subscribe('${subKey}', true)">🤖 Avtomatik sotib olish</button>`;
 }
 
 function buildBigWatchBtn(subKey, isWatching) {
-  if (!TG_USER_ID) return `<p style="color:var(--tg-hint);font-size:12px">Bildirishnoma olish uchun Telegramdan oching.</p>`;
+  if (!TG_USER_ID) return `<p style="color:var(--tg-hint);font-size:12px">Telegram orqali oching.</p>`;
   return isWatching
     ? `<button class="big-watch-btn watching" onclick="unsubscribe('${subKey}')">✅ Kuzatilmoqda — bekor qilish</button>`
-    : `<button class="big-watch-btn" onclick="subscribe('${subKey}')">🔔 Bilet chiqsa xabar ber</button>`;
+    : `<button class="big-watch-btn" onclick="subscribe('${subKey}', true)">🤖 Avtomatik sotib olish</button>`;
 }
 
 // ───────────────────────────── SUBSCRIBE / UNSUBSCRIBE ───────────────────────
-async function subscribe(subKey) {
+async function subscribe(subKey, autoBuy = false) {
   if (!TG_USER_ID) {
     showToast("Botni Telegram orqali oching!");
     return;
   }
-  showLoading(true, "Kuzatuv qo'shilmoqda...");
+  showLoading(true, "Qo'shilmoqda...");
   try {
     const res = await apiFetch("/api/subscribe", {
       method: "POST",
@@ -430,11 +430,15 @@ async function subscribe(subKey) {
         date:       state.date,
         time_from:  state.timeFrom || null,
         time_to:    state.timeTo   || null,
+        auto_buy:   autoBuy,
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
       state.activeSubs[subKey] = res.id;
-      showToast("✅ Kuzatuv yoqildi! Bilet chiqsa xabar beraman.");
+      showToast(autoBuy
+        ? "🤖 Bilet chiqsa avtomatik sotib olinadi!"
+        : "✅ Kuzatuv yoqildi!"
+      );
       refreshResultButtons(subKey, true);
       updateBellBadge();
     }
@@ -463,16 +467,15 @@ async function unsubscribe(subKey) {
 }
 
 function refreshResultButtons(subKey, isWatching) {
-  // Update all watch buttons on results screen
   document.querySelectorAll(".watch-btn").forEach(btn => {
-    btn.className = isWatching ? "watch-btn watching" : "watch-btn";
-    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🔔 Bilet chiqsa xabar ber";
-    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey);
+    btn.className = isWatching ? "watch-btn watching" : "watch-btn auto-buy-btn";
+    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🤖 Avtomatik sotib olish";
+    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey, true);
   });
   document.querySelectorAll(".big-watch-btn").forEach(btn => {
     btn.className = isWatching ? "big-watch-btn watching" : "big-watch-btn";
-    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🔔 Bilet chiqsa xabar ber";
-    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey);
+    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🤖 Avtomatik sotib olish";
+    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey, true);
   });
 }
 
@@ -520,7 +523,7 @@ function renderSubscriptions(subs) {
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
           <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}</div>
-          <span class="sub-status">⏳ Kuzatilmoqda (har 10 daqiqa)</span>
+          <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Kuzatilmoqda"} (har 10 daqiqa)</span>
         </div>
         <button class="sub-delete" onclick="deleteSubFromList(${s.id},'${subKeyOf(s.from_code, s.to_code, s.date)}')" title="O'chirish">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
