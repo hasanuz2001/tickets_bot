@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import httpx
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters
@@ -267,8 +267,24 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- ASOSIY ---
+async def post_init(application):
+    """Bot ishga tushganda menu tugmasini o'rnatish."""
+    await application.bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="🎫 Chipta qidirish",
+            web_app=WebAppInfo(url=WEBAPP_URL),
+        )
+    )
+    print(f"✅ Menu button o'rnatildi: {WEBAPP_URL}")
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
     conv = ConversationHandler(
         entry_points=[
