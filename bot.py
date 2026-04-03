@@ -266,6 +266,73 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ── /login ─────────────────────────────────────────────────────────────────────
+LOGIN_EMAIL, LOGIN_PASS = range(10, 12)
+SERVER_URL = os.getenv("WEBAPP_URL", "http://localhost:8000")
+
+import httpx as _httpx
+
+
+async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🔐 <b>eticket.railway.uz</b> login ma'lumotlarini kiriting.\n\n"
+        "Bu ma'lumotlar bilet topilganda <b>avtomatik sahifani ochish</b> uchun kerak.\n\n"
+        "📧 <b>Email yoki telefon raqamingizni</b> yuboring:\n"
+        "<i>(Bekor qilish: /cancel)</i>",
+        parse_mode="HTML",
+    )
+    return LOGIN_EMAIL
+
+
+async def login_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["railway_login"] = update.message.text.strip()
+    await update.message.reply_text(
+        "🔑 <b>Parolingizni</b> yuboring:",
+        parse_mode="HTML",
+    )
+    return LOGIN_PASS
+
+
+async def login_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id  = str(update.message.from_user.id)
+    login    = context.user_data.get("railway_login", "")
+    password = update.message.text.strip()
+
+    # Parol xabarini o'chirish (xavfsizlik)
+    await update.message.delete()
+
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{SERVER_URL}/api/credentials",
+                json={"user_id": user_id, "login": login, "password": password},
+            )
+            r.raise_for_status()
+        await update.effective_chat.send_message(
+            "✅ <b>Login saqlandi!</b>\n\n"
+            "Endi bilet topilganda bot avtomatik ravishda eticket.railway.uz ga kirib, "
+            "to'lov sahifasigacha olib boradi va screenshot yuboradi.\n\n"
+            "Login ma'lumotlarini o'chirish: /logout",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.effective_chat.send_message(
+            f"❌ Saqlashda xatolik: {e}\nQayta urinib ko'ring: /login",
+        )
+
+    return ConversationHandler.END
+
+
+async def logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            await client.delete(f"{SERVER_URL}/api/credentials/{user_id}")
+        await update.message.reply_text("✅ Login ma'lumotlari o'chirildi.")
+    except Exception:
+        await update.message.reply_text("❌ Xatolik yuz berdi.")
+
+
 # --- ASOSIY ---
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -283,8 +350,19 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    app.add_handler(CommandHandler("start", start))
+    login_conv = ConversationHandler(
+        entry_points=[CommandHandler("login", login_start)],
+        states={
+            LOGIN_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, login_email)],
+            LOGIN_PASS:  [MessageHandler(filters.TEXT & ~filters.COMMAND, login_pass)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("logout", logout_cmd))
     app.add_handler(conv)
+    app.add_handler(login_conv)
 
     print("✅ Bot ishga tushdi!")
     app.run_polling()
