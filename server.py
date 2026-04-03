@@ -63,14 +63,6 @@ def init_db():
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             )
         """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_credentials (
-                user_id     TEXT PRIMARY KEY,
-                login       TEXT NOT NULL,
-                password    TEXT NOT NULL,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
         # Migrations for existing DBs
         for col in ["time_from TEXT", "time_to TEXT"]:
             try:
@@ -225,22 +217,15 @@ async def check_subscriptions():
             trains   = extract_available(data, sub["time_from"], sub["time_to"])
 
             if trains:
-                # Foydalanuvchida railway login bor bo'lsa — avtomatik ochish
-                has_creds = False
-                with get_db() as c:
-                    has_creds = bool(c.execute(
-                        "SELECT 1 FROM user_credentials WHERE user_id=?",
-                        (sub["user_id"],)
-                    ).fetchone())
-
-                if has_creds:
+                # Umumiy railway login bor bo'lsa — avtomatik sahifa ochish
+                if os.getenv("RAILWAY_LOGIN") and os.getenv("RAILWAY_PASSWORD"):
                     try:
                         from automation import send_booking_notification
                         await send_booking_notification(
-                            user_id=sub["user_id"],
-                            sub=dict(sub),
-                            train=trains[0],
-                            bot_token=BOT_TOKEN,
+                            user_id   = sub["user_id"],
+                            sub       = dict(sub),
+                            train     = trains[0],
+                            bot_token = BOT_TOKEN,
                         )
                         logger.info(f"Automation notification sent for sub {sub['id']}")
                     except Exception as ae:
@@ -306,10 +291,6 @@ class TrainSearchRequest(BaseModel):
     date:      str
 
 
-class CredentialsRequest(BaseModel):
-    user_id:  str
-    login:    str
-    password: str
 
 
 class SubscribeRequest(BaseModel):
@@ -386,28 +367,6 @@ async def delete_subscription(sub_id: int):
             "UPDATE subscriptions SET is_active=0 WHERE id=?",
             (sub_id,),
         )
-        conn.commit()
-    return {"status": "ok"}
-
-
-# ── CREDENTIALS ──────────────────────────────────────────────────────────────
-@app.post("/api/credentials")
-async def save_credentials(req: CredentialsRequest):
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO user_credentials (user_id, login, password)
-               VALUES (?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET login=excluded.login, password=excluded.password""",
-            (req.user_id, req.login, req.password),
-        )
-        conn.commit()
-    return {"status": "ok"}
-
-
-@app.delete("/api/credentials/{user_id}")
-async def delete_credentials(user_id: str):
-    with get_db() as conn:
-        conn.execute("DELETE FROM user_credentials WHERE user_id=?", (user_id,))
         conn.commit()
     return {"status": "ok"}
 
