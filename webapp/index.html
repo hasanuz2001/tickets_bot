@@ -17,6 +17,13 @@
       </svg>
     </button>
     <h1 class="header-title" id="headerTitle">🚆 Chipta Qidirish</h1>
+    <button class="bell-btn" id="profileBtn" onclick="goToProfile()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2"/>
+        <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span class="profile-dot" id="profileDot" style="display:none"></span>
+    </button>
     <button class="bell-btn" id="bellBtn" onclick="goToSubscriptions()">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -170,6 +177,43 @@
   <!-- ===== SUBSCRIPTIONS SCREEN ===== -->
   <div class="screen" id="screenSubscriptions">
     <div class="subs-list" id="subsList"></div>
+  </div>
+
+  <!-- ===== PROFILE SCREEN ===== -->
+  <div class="screen" id="screenProfile">
+    <div class="profile-card">
+      <div class="profile-avatar" id="profileAvatar">👤</div>
+      <p class="profile-hint">Chipta xarid qilish uchun passport ma'lumotlarini kiriting</p>
+    </div>
+
+    <div class="form-section">
+      <label class="form-label">To'liq ism (pasportdagi kabi)</label>
+      <input class="form-input" id="inputFullName"
+             type="text" placeholder="Masalan: HASAN HAYDAROV"
+             autocomplete="name" />
+    </div>
+
+    <div class="form-section">
+      <label class="form-label">Passport seriya va raqami</label>
+      <input class="form-input" id="inputPassport"
+             type="text" placeholder="Masalan: AA1234567"
+             autocomplete="off" maxlength="9" />
+    </div>
+
+    <div class="form-section">
+      <label class="form-label">Telefon raqami</label>
+      <input class="form-input" id="inputPhone"
+             type="tel" placeholder="+998901234567"
+             autocomplete="tel" />
+    </div>
+
+    <button class="profile-save-btn" onclick="saveProfile()">
+      💾 Saqlash
+    </button>
+
+    <div class="profile-saved-info" id="profileSavedInfo" style="display:none">
+      <div class="saved-badge">✅ Ma'lumotlar saqlangan</div>
+    </div>
   </div>
 
   <!-- ===== LOADING OVERLAY ===== -->

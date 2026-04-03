@@ -68,7 +68,8 @@ function showScreen(id) {
 
   const isMain = id === "screenMain";
   document.getElementById("backBtn").classList.toggle("visible", !isMain);
-  document.getElementById("bellBtn").style.display = isMain ? "" : "none";
+  document.getElementById("bellBtn").style.display    = isMain ? "" : "none";
+  document.getElementById("profileBtn").style.display = isMain ? "" : "none";
 
   const titles = {
     screenMain:          "🚆 Chipta Qidirish",
@@ -77,6 +78,7 @@ function showScreen(id) {
     screenTime:          "Vaqt oralig'i",
     screenResults:       "Natijalar",
     screenSubscriptions: "🔔 Kuzatishlarim",
+    screenProfile:       "👤 Profil",
   };
   document.getElementById("headerTitle").textContent = titles[id] || "";
 
@@ -550,6 +552,63 @@ async function deleteSubFromList(subId, subKey) {
   }
 }
 
+// ───────────────────────────── PROFILE ───────────────────────────────────────
+async function goToProfile() {
+  showScreen("screenProfile");
+  await loadProfile();
+}
+
+async function loadProfile() {
+  if (!TG_USER_ID) return;
+  try {
+    const p = await apiFetch(`/api/passenger/${TG_USER_ID}`);
+    document.getElementById("inputFullName").value = p.full_name || "";
+    document.getElementById("inputPassport").value = p.passport  || "";
+    document.getElementById("inputPhone").value    = p.phone     || "";
+    document.getElementById("profileAvatar").textContent = "✅";
+    document.getElementById("profileSavedInfo").style.display = "";
+    document.getElementById("profileDot").style.display = "";
+  } catch {
+    // Not saved yet — empty form
+    document.getElementById("profileDot").style.display = "none";
+  }
+}
+
+async function saveProfile() {
+  if (!TG_USER_ID) {
+    showToast("Telegram orqali oching!");
+    return;
+  }
+  const fullName = document.getElementById("inputFullName").value.trim().toUpperCase();
+  const passport = document.getElementById("inputPassport").value.trim().toUpperCase();
+  const phone    = document.getElementById("inputPhone").value.trim();
+
+  if (!fullName) { showToast("⚠️ To'liq ismni kiriting"); return; }
+  if (passport.length < 6) { showToast("⚠️ Passport raqamini to'g'ri kiriting"); return; }
+  if (!phone.startsWith("+")) { showToast("⚠️ Telefon: +998... formatida kiriting"); return; }
+
+  showLoading(true, "Saqlanmoqda...");
+  try {
+    await apiFetch("/api/passenger", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id:   TG_USER_ID,
+        full_name: fullName,
+        passport:  passport,
+        phone:     phone,
+      }),
+    });
+    document.getElementById("profileAvatar").textContent = "✅";
+    document.getElementById("profileSavedInfo").style.display = "";
+    document.getElementById("profileDot").style.display = "";
+    showToast("✅ Ma'lumotlar saqlandi!");
+  } catch {
+    showToast("❌ Xatolik yuz berdi.");
+  } finally {
+    showLoading(false);
+  }
+}
+
 // ───────────────────────────── BELL BADGE ────────────────────────────────────
 async function loadActiveSubs() {
   if (!TG_USER_ID) return;
@@ -647,3 +706,4 @@ function requestBuyTicket(train) {
 // ───────────────────────────── INIT ──────────────────────────────────────────
 updateSearchBtn();
 loadActiveSubs();
+loadProfile();

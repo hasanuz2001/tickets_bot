@@ -493,6 +493,106 @@ body {
 .no-results h3 { font-size: 17px; color: var(--tg-text); margin-bottom: 6px; font-weight: 600; }
 .no-results p  { font-size: 13px; line-height: 1.6; }
 
+/* ===== PROFILE BUTTON DOT ===== */
+.profile-dot {
+  position: absolute;
+  top: 5px; right: 5px;
+  width: 8px; height: 8px;
+  background: var(--success);
+  border-radius: 50%;
+  border: 1.5px solid var(--tg-bg);
+}
+
+/* ===== PROFILE SCREEN ===== */
+.profile-card {
+  background: var(--tg-bg);
+  border-radius: var(--radius);
+  padding: 24px 16px 18px;
+  text-align: center;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+}
+
+.profile-avatar {
+  font-size: 52px;
+  margin-bottom: 8px;
+  line-height: 1;
+}
+
+.profile-hint {
+  font-size: 13px;
+  color: var(--tg-hint);
+  line-height: 1.5;
+}
+
+.form-section {
+  margin-bottom: 12px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tg-hint);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 6px;
+  padding-left: 2px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 13px 14px;
+  background: var(--tg-bg);
+  border: 1.5px solid rgba(0,0,0,0.08);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--tg-text);
+  outline: none;
+  transition: border-color var(--transition);
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  border-color: var(--tg-btn);
+}
+
+.form-input::placeholder {
+  color: var(--tg-hint);
+  font-weight: 400;
+}
+
+.profile-save-btn {
+  width: 100%;
+  padding: 14px;
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  border: none;
+  border-radius: var(--radius);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: opacity var(--transition);
+}
+.profile-save-btn:active { opacity: 0.8; }
+
+.profile-saved-info {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.saved-badge {
+  display: inline-block;
+  background: rgba(52,199,89,0.12);
+  color: var(--success);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 /* ===== TIME FIELD ===== */
 .time-icon { background: rgba(88,86,214,0.12); color: #5856d6; }
 
