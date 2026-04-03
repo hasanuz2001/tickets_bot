@@ -64,27 +64,40 @@ async def open_ticket_page(
             await page.wait_for_timeout(1500)
 
             # ── 2. Login sahifasiga o'tish ─────────────────────────
-            logger.info("[automation] Navigating to login...")
-            await page.goto(f"{RAILWAY}/ru/login", wait_until="networkidle", timeout=15000)
+            # "Вход" havolasini JS orqali bosish (SPA router link)
+            logger.info("[automation] Clicking login link...")
+            await page.evaluate(
+                "() => { const a = Array.from(document.querySelectorAll('a'))"
+                ".find(el => el.textContent.trim() === 'Вход'); if(a) a.click(); }"
+            )
+            await page.wait_for_url("**/auth/login", timeout=8000)
             await page.wait_for_timeout(1000)
+            logger.info(f"[automation] Login page: {page.url}")
 
-            # Email / telefon
-            email_input = page.locator(
-                "input[type='email'], input[name='email'], "
-                "input[placeholder*='mail'], input[placeholder*='Телефон']"
-            ).first
-            await email_input.fill(RAILWAY_LOGIN, timeout=8000)
+            # Email bilan kirish uchun "ПОЧТА" tabini bosish
+            is_email = "@" in RAILWAY_LOGIN
+            if is_email:
+                pochta_tab = page.locator(
+                    "button:has-text('ПОЧТА'), span:has-text('ПОЧТА'), div:has-text('ПОЧТА')"
+                ).first
+                if await pochta_tab.count():
+                    await pochta_tab.click()
+                    await page.wait_for_timeout(800)
+                    logger.info("[automation] Switched to email tab")
+
+            # Login field (email yoki telefon)
+            login_input = page.locator("input[type='email'], input[type='text']").first
+            await login_input.fill(RAILWAY_LOGIN, timeout=8000)
 
             # Parol
-            pass_input = page.locator("input[type='password']").first
-            await pass_input.fill(RAILWAY_PASS, timeout=5000)
+            await page.locator("input[type='password']").first.fill(RAILWAY_PASS, timeout=5000)
 
-            # Login tugmasi
+            # ВОЙТИ tugmasi
             await page.locator(
-                "button[type='submit'], button:has-text('Войти'), button:has-text('Kirish')"
+                "button:has-text('ВОЙТИ'), button:has-text('Войти'), button[type='submit']"
             ).first.click(timeout=5000)
 
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(3000)
             logger.info(f"[automation] After login: {page.url}")
 
             # ── 3. Poyezdlar sahifasiga o'tish ────────────────────
