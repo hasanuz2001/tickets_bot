@@ -382,7 +382,7 @@ function buildTrainCard(train, subKey, isWatching) {
         </div>
       </div>
       <div class="seats-list">${seatsHtml}</div>
-      <a href="https://eticket.railway.uz" target="_blank" class="buy-btn">🎫 Chipta sotib olish</a>
+      <button class="buy-btn" onclick="openRailway()">🎫 Chipta sotib olish</button>
       ${buildWatchBtn(subKey, isWatching)}
     </div>`;
 }
@@ -604,6 +604,15 @@ function showError(msg) {
 function resetToMain() {
   state.screenStack = ["screenMain"];
   showScreen("screenMain");
+}
+
+function openRailway() {
+  const url = "https://eticket.railway.uz";
+  if (tg) {
+    tg.openLink(url);   // Dialog yo'q — to'g'ridan ochadi
+  } else {
+    window.open(url, "_blank");
+  }
 }
 
 // ───────────────────────────── INIT ──────────────────────────────────────────
