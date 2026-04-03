@@ -65,8 +65,9 @@ def init_db():
     logger.info("Database initialized.")
 
 
-# ── RAILWAY API (Laravel Sanctum CSRF flow) ───────────────────────────────────
+# ── RAILWAY API ───────────────────────────────────────────────────────────────
 async def fetch_trains(from_code: str, to_code: str, date: str) -> dict:
+    import uuid
     payload = {
         "directions": {
             "forward": {
@@ -76,34 +77,20 @@ async def fetch_trains(from_code: str, to_code: str, date: str) -> dict:
             }
         }
     }
-    headers_base = {
+    # Double-submit cookie pattern: generate UUID, send as both Cookie and header
+    xsrf = str(uuid.uuid4())
+    headers = {
         "User-Agent": RAILWAY_UA,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "ru-RU,ru;q=0.9,uz;q=0.8",
+        "Content-Type": "application/json",
         "Origin":  RAILWAY_BASE,
         "Referer": RAILWAY_BASE + "/ru/home",
+        "Cookie": f"XSRF-TOKEN={xsrf}",
+        "X-XSRF-TOKEN": xsrf,
     }
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        # Step 1 — get XSRF-TOKEN cookie via Sanctum
-        await client.get(f"{RAILWAY_BASE}/sanctum/csrf-cookie", headers=headers_base)
-
-        xsrf = client.cookies.get("XSRF-TOKEN", "")
-        if not xsrf:
-            raise RuntimeError("CSRF cookie not received from railway.uz")
-
-        import urllib.parse
-        xsrf_decoded = urllib.parse.unquote(xsrf)
-
-        # Step 2 — POST trains API
-        resp = await client.post(
-            RAILWAY_API,
-            json=payload,
-            headers={
-                **headers_base,
-                "Content-Type": "application/json",
-                "X-XSRF-TOKEN": xsrf_decoded,
-            },
-        )
+        resp = await client.post(RAILWAY_API, json=payload, headers=headers)
         resp.raise_for_status()
         return resp.json()
 
