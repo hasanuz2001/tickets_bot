@@ -500,7 +500,15 @@ body {
 .sub-icon { font-size: 26px; flex-shrink: 0; }
 .sub-info { flex: 1; min-width: 0; }
 .sub-route { font-size: 15px; font-weight: 700; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sub-date  { font-size: 12px; color: var(--tg-hint); }
+.sub-reys {
+  font-size: 14px;
+  color: var(--tg-text);
+  margin: 6px 0 4px;
+  line-height: 1.35;
+}
+.sub-reys-route .sub-reys-hint { font-weight: 500; color: var(--tg-hint); font-size: 12px; }
+.sub-reys-time { font-weight: 600; color: var(--tg-link); }
+.sub-date  { font-size: 12px; color: var(--tg-hint); line-height: 1.45; }
 .sub-status {
   font-size: 11px;
   font-weight: 600;

@@ -106,6 +106,8 @@ def init_db():
             "comfort_class TEXT DEFAULT 'all'",
             "train_number TEXT",
             "train_brand TEXT",
+            "dep_time TEXT",
+            "arr_time TEXT",
         ]:
             try:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col}")
@@ -410,7 +412,15 @@ def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
         f"🚆 <b>{sub['from_name']} → {sub['to_name']}</b>",
     ]
     if stn:
-        lines.append(f"🚂 <b>Poyezd №{stn}</b>")
+        try:
+            dep_s = str(sub["dep_time"] or "").strip()
+            arr_s = str(sub["arr_time"] or "").strip()
+        except (KeyError, IndexError):
+            dep_s, arr_s = "", ""
+        tpart = ""
+        if dep_s:
+            tpart = f"  ⏱ {dep_s}" + (f" → {arr_s}" if arr_s else "")
+        lines.append(f"🚂 <b>Poyezd №{stn}</b>{tpart}")
     lines += [
         f"📅 {sub['date']}{time_filter}{comfort_filter}{brand_filter}",
         "",
@@ -621,6 +631,16 @@ class SubscribeRequest(BaseModel):
     comfort_class: str = "all"  # all yoki vergul: economy,business
     train_number: str | None = None  # NULL = butun yo'nalish; raqam = faqat shu reys
     train_brand: str | None = None  # vergul: afrosiyob,sharq
+    dep_time: str | None = None  # jo'nash vaqti (HH:MM) — kuzatishlar ro'yxati uchun
+    arr_time: str | None = None  # kelish vaqti
+
+    @field_validator("dep_time", "arr_time", mode="before")
+    @classmethod
+    def _strip_dep_arr(cls, v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
     @field_validator("train_brand", mode="before")
     @classmethod
@@ -701,10 +721,11 @@ async def subscribe(req: SubscribeRequest):
         if existing:
             conn.execute(
                 """UPDATE subscriptions
-                   SET auto_buy=?, time_from=?, time_to=?, comfort_class=?, train_number=?, train_brand=?
+                   SET auto_buy=?, time_from=?, time_to=?, comfort_class=?, train_number=?, train_brand=?,
+                       dep_time=?, arr_time=?
                    WHERE id=? AND is_active=1""",
                 (1 if req.auto_buy else 0, req.time_from, req.time_to,
-                 req.comfort_class, tn, tbrand, existing["id"]),
+                 req.comfort_class, tn, tbrand, req.dep_time, req.arr_time, existing["id"]),
             )
             conn.commit()
             sub_id = existing["id"]
@@ -717,11 +738,11 @@ async def subscribe(req: SubscribeRequest):
 
         cur = conn.execute(
             """INSERT INTO subscriptions
-               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class, train_number, train_brand)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class, train_number, train_brand, dep_time, arr_time)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
              req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0,
-             req.comfort_class, tn, tbrand),
+             req.comfort_class, tn, tbrand, req.dep_time, req.arr_time),
         )
         conn.commit()
         sub_id = cur.lastrowid

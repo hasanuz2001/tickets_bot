@@ -855,7 +855,8 @@ function buildSoldOutTrainCard(train) {
   const isW = !!state.activeSubs[subKey];
 
   return `
-    <div class="train-card train-card-soldout" data-train-num="${encodeURIComponent(num)}">
+    <div class="train-card train-card-soldout" data-train-num="${encodeURIComponent(num)}"
+         data-dep="${encodeURIComponent(dep || "")}" data-arr="${encodeURIComponent(arr || "")}">
       <div class="train-header">
         <div class="train-times">
           <span class="train-dep">${dep}</span>
@@ -868,22 +869,23 @@ function buildSoldOutTrainCard(train) {
         </div>
       </div>
       <p class="soldout-note">Hozircha bo'sh joy yo'q</p>
-      <div class="train-soldout-actions">${soldOutTrainActionsHtml(num, isW)}</div>
+      <div class="train-soldout-actions">${soldOutTrainActionsHtml(num, isW, dep, arr)}</div>
     </div>`;
 }
 
-function soldOutTrainActionsHtml(trainNum, isWatching) {
+function soldOutTrainActionsHtml(trainNum, isWatching, dep, arr) {
   if (!TG_USER_ID) {
     return `<p class="soldout-telegram-hint">Telegram orqali oching</p>`;
   }
-  /* onclick atributi ikki marta " — JSON.stringify bitta qo'shtirnoqda */
   const n = JSON.stringify(String(trainNum ?? ""));
+  const d = JSON.stringify(dep != null ? String(dep) : "");
+  const a = JSON.stringify(arr != null ? String(arr) : "");
   if (isWatching) {
     return `<button type="button" class="watch-row-btn watching" onclick='unsubscribeTrain(${n})'>✅ Kuzatilmoqda — bekor qilish</button>`;
   }
   return `
-    <button type="button" class="watch-row-btn notify" onclick='subscribeTrainWatch(${n}, false)'>🔔 Bilet bo'lganda xabar berish</button>
-    <button type="button" class="watch-row-btn auto" onclick='subscribeTrainWatch(${n}, true)'>🤖 Paydo bo'lganda sotib olish</button>`;
+    <button type="button" class="watch-row-btn notify" onclick='subscribeTrainWatch(${n}, false, ${d}, ${a})'>🔔 Bilet bo'lganda xabar berish</button>
+    <button type="button" class="watch-row-btn auto" onclick='subscribeTrainWatch(${n}, true, ${d}, ${a})'>🤖 Paydo bo'lganda sotib olish</button>`;
 }
 
 function buildRouteWatchSection(routeSubKey, isWatching) {
@@ -905,11 +907,13 @@ function mountRouteWatchSection(routeSubKey, isWatching) {
   return `<div class="route-watch-section">${buildRouteWatchSection(routeSubKey, isWatching)}</div>`;
 }
 
-function subscribeTrainWatch(trainNumber, autoBuy) {
+function subscribeTrainWatch(trainNumber, autoBuy, depTime, arrTime) {
   subscribe(
     subKeyOf(state.fromCode, state.toCode, state.date, trainNumber, state.trainBrandCsv, state.comfortCsv),
     autoBuy,
-    trainNumber
+    trainNumber,
+    depTime,
+    arrTime
   );
 }
 
@@ -918,12 +922,14 @@ function unsubscribeTrain(trainNumber) {
 }
 
 // ───────────────────────────── SUBSCRIBE / UNSUBSCRIBE ───────────────────────
-async function subscribe(subKey, autoBuy = false, trainNumber = null) {
+async function subscribe(subKey, autoBuy = false, trainNumber = null, depTime = null, arrTime = null) {
   if (!TG_USER_ID) {
     showToast("Botni Telegram orqali oching!");
     return;
   }
   const tn = trainNumber != null && String(trainNumber).trim() !== "" ? String(trainNumber).trim() : null;
+  const dep = depTime != null && String(depTime).trim() !== "" ? String(depTime).trim() : null;
+  const arr = arrTime != null && String(arrTime).trim() !== "" ? String(arrTime).trim() : null;
   showLoading(true, "Qo'shilmoqda...");
   try {
     const res = await apiFetch("/api/subscribe", {
@@ -941,6 +947,8 @@ async function subscribe(subKey, autoBuy = false, trainNumber = null) {
         comfort_class: state.comfortCsv === "all" ? "all" : state.comfortCsv,
         train_number: tn,
         train_brand: state.trainBrandCsv === "all" ? null : state.trainBrandCsv,
+        dep_time:   tn ? dep : null,
+        arr_time:   tn ? arr : null,
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
@@ -991,10 +999,12 @@ function refreshWatchUI(changedSubKey) {
   document.querySelectorAll(".train-card-soldout").forEach(card => {
     const enc = card.getAttribute("data-train-num") || "";
     const num = decodeURIComponent(enc);
+    const dep = decodeURIComponent(card.getAttribute("data-dep") || "");
+    const arr = decodeURIComponent(card.getAttribute("data-arr") || "");
     const sk = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrandCsv, state.comfortCsv);
     const box = card.querySelector(".train-soldout-actions");
     if (box) {
-      box.innerHTML = soldOutTrainActionsHtml(num, !!state.activeSubs[sk]);
+      box.innerHTML = soldOutTrainActionsHtml(num, !!state.activeSubs[sk], dep, arr);
     }
   });
 }
@@ -1046,7 +1056,8 @@ function renderSubscriptions(subs) {
         <div class="sub-icon">🚆</div>
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
-          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${tbL ? `&nbsp;🚄 ${tbL}` : ""}${ccL ? `&nbsp;🪑 ${ccL}` : ""}</div>
+          ${subCardReysLineHtml(s)}
+          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ Qidiruv: ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${tbL ? `&nbsp;🚄 ${tbL}` : ""}${ccL ? `&nbsp;🪑 ${ccL}` : ""}</div>
           <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Faqat xabar"} (har 10 daqiqa)</span>
           <div class="sub-actions">
             ${Number(s.auto_buy) ? `<button type="button" class="sub-action-btn" onclick="disableSubAutoBuy(${s.id})">🤖 Avtoni o'chirish</button>` : ""}
@@ -1207,6 +1218,23 @@ function escQ(s) { return s.replace(/'/g, "\\'"); }
 /** Kartochka matnida HTML buzilishining oldini olish */
 function escHtmlText(s) {
   return String(s ?? "").replace(/[<>]/g, "");
+}
+
+/** Kuzatishlarim: qaysi reys va qachon jo'naydi */
+function subCardReysLineHtml(s) {
+  const tn = s.train_number && String(s.train_number).trim();
+  if (!tn) {
+    return `<div class="sub-reys sub-reys-route">📋 <b>Butun yo'nalish</b> <span class="sub-reys-hint">(alohida reys tanlanmagan)</span></div>`;
+  }
+  const dep = s.dep_time && String(s.dep_time).trim();
+  const arr = s.arr_time && String(s.arr_time).trim();
+  let times = "";
+  if (dep) {
+    times = arr
+      ? ` <span class="sub-reys-time">⏱ ${escHtmlText(dep)} → ${escHtmlText(arr)}</span>`
+      : ` <span class="sub-reys-time">⏱ ${escHtmlText(dep)}</span>`;
+  }
+  return `<div class="sub-reys">🚆 Reys <b>№${escHtmlText(tn)}</b>${times}</div>`;
 }
 
 function showLoading(on, text = "Yuklanmoqda...") {
