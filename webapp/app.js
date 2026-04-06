@@ -714,7 +714,6 @@ function buildSoldOutTrainCard(train) {
   const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
   const brand = train.brand || train.type || "";
   const num   = String(train.number ?? "").trim();
-  const tjson = JSON.stringify(num);
   const subKey = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrand);
   const isW = !!state.activeSubs[subKey];
 
@@ -732,34 +731,36 @@ function buildSoldOutTrainCard(train) {
         </div>
       </div>
       <p class="soldout-note">Hozircha bo'sh joy yo'q</p>
-      <div class="train-soldout-actions">${soldOutTrainActionsHtml(tjson, isW)}</div>
+      <div class="train-soldout-actions">${soldOutTrainActionsHtml(num, isW)}</div>
     </div>`;
 }
 
-function soldOutTrainActionsHtml(trainNumberJson, isWatching) {
+function soldOutTrainActionsHtml(trainNum, isWatching) {
   if (!TG_USER_ID) {
     return `<p class="soldout-telegram-hint">Telegram orqali oching</p>`;
   }
+  /* onclick atributi ikki marta " — JSON.stringify bitta qo'shtirnoqda */
+  const n = JSON.stringify(String(trainNum ?? ""));
   if (isWatching) {
-    return `<button type="button" class="watch-row-btn watching" onclick="unsubscribeTrain(${trainNumberJson})">✅ Kuzatilmoqda — bekor qilish</button>`;
+    return `<button type="button" class="watch-row-btn watching" onclick='unsubscribeTrain(${n})'>✅ Kuzatilmoqda — bekor qilish</button>`;
   }
   return `
-    <button type="button" class="watch-row-btn notify" onclick="subscribeTrainWatch(${trainNumberJson}, false)">🔔 Bilet bo'lganda xabar berish</button>
-    <button type="button" class="watch-row-btn auto" onclick="subscribeTrainWatch(${trainNumberJson}, true)">🤖 Paydo bo'lganda sotib olish</button>`;
+    <button type="button" class="watch-row-btn notify" onclick='subscribeTrainWatch(${n}, false)'>🔔 Bilet bo'lganda xabar berish</button>
+    <button type="button" class="watch-row-btn auto" onclick='subscribeTrainWatch(${n}, true)'>🤖 Paydo bo'lganda sotib olish</button>`;
 }
 
 function buildRouteWatchSection(routeSubKey, isWatching) {
   if (!TG_USER_ID) {
     return `<p style="color:var(--tg-hint);font-size:12px">Telegram orqali oching</p>`;
   }
-  const sk = JSON.stringify(routeSubKey);
+  const rk = JSON.stringify(routeSubKey);
   if (isWatching) {
-    return `<button type="button" class="big-watch-btn watching" onclick="unsubscribe(${sk})">✅ Kuzatilmoqda — bekor qilish</button>`;
+    return `<button type="button" class="big-watch-btn watching" onclick='unsubscribe(${rk})'>✅ Kuzatilmoqda — bekor qilish</button>`;
   }
   return `
     <div class="route-watch-btns">
-      <button type="button" class="big-watch-btn notify" onclick="subscribe(${sk}, false)">🔔 Bilet bo'lganda xabar berish</button>
-      <button type="button" class="big-watch-btn auto" onclick="subscribe(${sk}, true)">🤖 Paydo bo'lganda sotib olish</button>
+      <button type="button" class="big-watch-btn notify" onclick='subscribe(${rk}, false)'>🔔 Bilet bo'lganda xabar berish</button>
+      <button type="button" class="big-watch-btn auto" onclick='subscribe(${rk}, true)'>🤖 Paydo bo'lganda sotib olish</button>
     </div>`;
 }
 
@@ -818,6 +819,8 @@ async function subscribe(subKey, autoBuy = false, trainNumber = null) {
       }
       refreshWatchUI(subKey);
       updateBellBadge();
+    } else {
+      showToast("Javob keldi, holatni Kuzatishlar ekranidan tekshiring.");
     }
   } catch {
     showToast("Xatolik yuz berdi. Qayta urinib ko'ring.");
@@ -879,6 +882,7 @@ async function goToSubscriptions() {
 
 function renderSubscriptions(subs) {
   const container = document.getElementById("subsList");
+  state.activeSubs = {};
 
   if (!subs.length) {
     container.innerHTML = `
@@ -903,15 +907,36 @@ function renderSubscriptions(subs) {
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
           <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${s.train_brand && s.train_brand !== "all" ? `&nbsp;🚄 ${trainBrandLabel(s.train_brand)}` : ""}${s.comfort_class && s.comfort_class !== "all" ? `&nbsp;🪑 ${comfortLabel(s.comfort_class)}` : ""}</div>
-          <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Kuzatilmoqda"} (har 10 daqiqa)</span>
+          <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Faqat xabar"} (har 10 daqiqa)</span>
+          <div class="sub-actions">
+            ${Number(s.auto_buy) ? `<button type="button" class="sub-action-btn" onclick="disableSubAutoBuy(${s.id})">🤖 Avtoni o'chirish</button>` : ""}
+            <button type="button" class="sub-action-btn sub-action-danger" onclick='deleteSubFromList(${s.id},${JSON.stringify(subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand))})'>🔕 Kuzatuvni to'xtatish</button>
+          </div>
         </div>
-        <button class="sub-delete" onclick='deleteSubFromList(${s.id},${JSON.stringify(subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand))})' title="O'chirish">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
       </div>
     `).join("")}`;
+}
+
+async function disableSubAutoBuy(subId) {
+  if (!TG_USER_ID) {
+    showToast("Telegram orqali oching.");
+    return;
+  }
+  showLoading(true, "Yangilanmoqda...");
+  try {
+    await apiFetch(`/api/subscriptions/${subId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ user_id: TG_USER_ID, auto_buy: false }),
+    });
+    showToast("✅ Avtomatik sotib olish o'chirildi. Joy chiqsa faqat xabar keladi.");
+    const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
+    renderSubscriptions(res.subscriptions || []);
+    updateBellBadge();
+  } catch {
+    showToast("Xatolik. Qayta urinib ko'ring.");
+  } finally {
+    showLoading(false);
+  }
 }
 
 async function deleteSubFromList(subId, subKey) {
@@ -992,6 +1017,7 @@ async function loadActiveSubs() {
   if (!TG_USER_ID) return;
   try {
     const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
+    state.activeSubs = {};
     (res.subscriptions || []).forEach(s => {
       state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand)] = s.id;
     });

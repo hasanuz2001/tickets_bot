@@ -707,6 +707,29 @@ async def get_subscriptions(user_id: str):
     return {"subscriptions": [dict(r) for r in rows]}
 
 
+class SubscriptionPatchRequest(BaseModel):
+    user_id: str
+    auto_buy: bool
+
+
+@app.patch("/api/subscriptions/{sub_id}")
+async def patch_subscription(sub_id: int, body: SubscriptionPatchRequest):
+    """Faqat o'z obunasi: auto_buy yoqish/o'chirish (kuzatuv faol qoladi)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id FROM subscriptions WHERE id=? AND user_id=? AND is_active=1",
+            (sub_id, body.user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Topilmadi")
+        conn.execute(
+            "UPDATE subscriptions SET auto_buy=? WHERE id=?",
+            (1 if body.auto_buy else 0, sub_id),
+        )
+        conn.commit()
+    return {"status": "ok"}
+
+
 @app.delete("/api/subscriptions/{sub_id}")
 async def delete_subscription(sub_id: int):
     with get_db() as conn:
