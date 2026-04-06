@@ -417,6 +417,57 @@ body {
   margin: 0;
 }
 
+/* Joy turi filtri: boshqa turlarda joy bor */
+.comfort-mismatch-route-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 149, 0, 0.1);
+  border: 1px solid rgba(255, 149, 0, 0.35);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.comfort-mismatch-route-icon { font-size: 22px; line-height: 1; }
+.comfort-mismatch-route-text {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--tg-text);
+}
+.comfort-mismatch-route-btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--tg-link);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.comfort-mismatch-route-btn:active { opacity: 0.88; }
+
+.train-card-other-comfort {
+  border: 1.5px solid rgba(255, 149, 0, 0.28);
+}
+.comfort-filter-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--tg-text);
+  padding: 10px 14px;
+  margin: 0;
+  background: rgba(255, 149, 0, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+.train-card-other-comfort .buy-btn-secondary {
+  margin-top: 6px;
+  margin-bottom: 0;
+  background: var(--tg-secondary-bg);
+  color: var(--tg-link);
+  border: 1.5px solid rgba(36, 129, 204, 0.35);
+}
+
 /* ===== SUBSCRIPTIONS SCREEN ===== */
 .subs-empty {
   text-align: center;

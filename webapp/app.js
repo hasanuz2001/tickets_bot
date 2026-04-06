@@ -80,6 +80,18 @@ function carMatchesComfort(carTypeName, comfort) {
   return true;
 }
 
+/** Vagon nomi qaysi qulaylik guruhi — foydalanuvchiga qisqa matn */
+function comfortBucketLabel(carTypeName) {
+  if (carMatchesComfort(carTypeName, "economy")) return "Ekonom";
+  if (carMatchesComfort(carTypeName, "business")) return "Business";
+  if (carMatchesComfort(carTypeName, "vip")) return "VIP";
+  return carTypeName || "Boshqa";
+}
+
+function trainHasAnyFreeSeat(train) {
+  return (train.cars || []).some(c => (c.freeSeats || 0) > 0);
+}
+
 // ───────────────────────────── STATE ─────────────────────────────────────────
 const state = {
   fromCode: null, fromName: null,
@@ -308,6 +320,12 @@ function updateSearchBtn() {
   document.getElementById("searchBtn").disabled = !(state.fromCode && state.toCode && state.date);
 }
 
+async function showAllComfortAndRescan() {
+  state.comfortClass = "all";
+  setField("comfortValue", comfortLabel("all"));
+  await doSearch();
+}
+
 // ───────────────────────────── SEARCH ────────────────────────────────────────
 async function doSearch() {
   if (!(state.fromCode && state.toCode && state.date)) return;
@@ -398,10 +416,29 @@ function renderResults(data) {
         ${mountRouteWatchSection(routeSubKey, isRouteWatching)}
       </div>`;
   } else {
-    html = timeFilteredTrains.map(train => {
-      if (trainHasComfortSeats(train)) return buildTrainCard(train);
-      return buildSoldOutTrainCard(train);
-    }).join("");
+    const comfortBlocked =
+      state.comfortClass !== "all" &&
+      rawAvailable.length > 0 &&
+      availableTrains.length === 0;
+    const routeBanner = comfortBlocked
+      ? `<div class="comfort-mismatch-route-banner">
+          <span class="comfort-mismatch-route-icon">🪑</span>
+          <div class="comfort-mismatch-route-text">
+            <strong>${comfortLabel(state.comfortClass)}</strong> tanlangan — shu turda bo'sh joy topilmadi,
+            lekin reyslarda <strong>boshqa vagon turlarida</strong> joy bor (masalan, Business / kupe).
+          </div>
+          <button type="button" class="comfort-mismatch-route-btn" onclick="showAllComfortAndRescan()">Barcha turlarni ko'rsatish</button>
+        </div>`
+      : "";
+    html =
+      routeBanner +
+      timeFilteredTrains
+        .map(train => {
+          if (trainHasComfortSeats(train)) return buildTrainCard(train);
+          if (trainHasAnyFreeSeat(train)) return buildTrainCardOtherComfort(train);
+          return buildSoldOutTrainCard(train);
+        })
+        .join("");
   }
 
   html += `<button class="new-search-btn" onclick="resetToMain()">🔄 Yangi qidiruv</button>`;
@@ -472,6 +509,55 @@ function buildTrainCard(train) {
       <div class="seats-list">${seatsHtml}</div>
       <p class="train-card-hint">Bo'sh joy bor — saytda o'zingiz sotib oling yoki vagon qatoridagi <b>🎫 Olish</b> orqali xizmat.</p>
       <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish</button>
+    </div>`;
+}
+
+/** Tanlangan qulaylikda joy yo'q, lekin API boshqa vagonlarda bo'sh joy qaytarganda */
+function buildTrainCardOtherComfort(train) {
+  const dep   = parseTime(train.departureDate || train.departureTime);
+  const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
+  const brand = train.brand || train.type || "";
+  const avail = (train.cars || []).filter(c => (c.freeSeats || 0) > 0);
+  const bucketLabels = [...new Set(avail.map(c => comfortBucketLabel(c.carTypeName)))];
+  const bucketsHint = bucketLabels.join(", ");
+
+  const seatsHtml = avail.map(car => {
+    const icon  = CAR_ICONS[car.carTypeName] || "🪑";
+    const price = (car.tariffs || []).map(t => t.tariff).filter(Boolean)[0];
+    return `<div class="seat-row">
+      <div class="seat-type">
+        <span class="seat-icon">${icon}</span>
+        <span class="seat-name">${car.carTypeName || "Vagon"}</span>
+        <span class="seat-count">(${car.freeSeats} joy)</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        <span class="seat-price">${price ? `${Number(price).toLocaleString()} so'm` : "—"}</span>
+        <button class="inline-buy-btn" onclick='requestBuyTicket(JSON.parse(decodeURIComponent("${encodeURIComponent(JSON.stringify({number:train.number||"",brand,dep,arr,car_type:car.carTypeName||"Vagon"}))}")))' >🎫 Olish</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="train-card train-card-other-comfort">
+      <div class="train-header">
+        <div class="train-times">
+          <span class="train-dep">${dep}</span>
+          <div class="train-duration"><span class="arrow-line"></span>→</div>
+          <span class="train-arr">${arr}</span>
+        </div>
+        <div class="train-meta">
+          <div class="train-brand ${getBrandClass(brand)}">${brand || "Poyezd"}</div>
+          <div class="train-num">№${train.number || ""}</div>
+        </div>
+      </div>
+      <p class="comfort-filter-hint">
+        <strong>${comfortLabel(state.comfortClass)}</strong> filtri yoqilgan — shu turda joy yo'q.
+        Boshqa turlarda joy bor: <strong>${bucketsHint}</strong>.
+      </p>
+      <div class="seats-list">${seatsHtml}</div>
+      <p class="train-card-hint">Quyidagi vagonlarda bo'sh joy bor — sotib olish yoki filtrni <b>Barcha turlar</b> qiling.</p>
+      <button type="button" class="buy-btn buy-btn-secondary" onclick="showAllComfortAndRescan()">🎫 Barcha turlar bilan qayta qidirish</button>
+      <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish (sayt)</button>
     </div>`;
 }
 
