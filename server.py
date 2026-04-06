@@ -156,34 +156,46 @@ def subscription_train_number(sub: sqlite3.Row) -> str | None:
     return str(t).strip()
 
 
-def subscription_comfort_class(sub: sqlite3.Row) -> str:
-    """SQLite qatoridan comfort_class (migratsiyasiz eski DB uchun 'all')."""
+def normalize_comfort_spec(raw) -> str:
+    """Bitta yoki vergul bilan: economy,business — tartiblangan."""
+    if raw is None or str(raw).strip() == "":
+        return "all"
+    s = str(raw).strip().lower()
+    if s == "all":
+        return "all"
+    valid = {"economy", "business", "vip"}
+    parts = sorted({p.strip() for p in s.split(",") if p.strip() and p.strip() in valid})
+    return "all" if not parts else ",".join(parts)
+
+
+def normalize_train_brand_spec(raw) -> str:
+    if raw is None or str(raw).strip() == "":
+        return "all"
+    s = str(raw).strip().lower()
+    if s == "all":
+        return "all"
+    valid = {"afrosiyob", "sharq", "talgo", "express"}
+    parts = sorted({p.strip() for p in s.split(",") if p.strip() and p.strip() in valid})
+    return "all" if not parts else ",".join(parts)
+
+
+def subscription_comfort_spec(sub: sqlite3.Row) -> str:
     try:
         c = sub["comfort_class"]
     except (KeyError, IndexError):
         return "all"
-    if c is None or str(c).strip() == "":
-        return "all"
-    s = str(c).strip().lower()
-    return s if s in ("all", "economy", "business", "vip") else "all"
+    return normalize_comfort_spec(c)
 
 
-def subscription_train_brand(sub: sqlite3.Row) -> str:
-    """Kuzatuv: poyezd turi filtri — all | afrosiyob | sharq | talgo | express."""
+def subscription_train_brand_spec(sub: sqlite3.Row) -> str:
     try:
         b = sub["train_brand"]
     except (KeyError, IndexError):
         return "all"
-    if b is None or str(b).strip() == "":
-        return "all"
-    s = str(b).strip().lower()
-    return s if s in ("all", "afrosiyob", "sharq", "talgo", "express") else "all"
+    return normalize_train_brand_spec(b)
 
 
-def train_matches_brand(train: dict, brand: str | None) -> bool:
-    """API train obyekti brand/type bo'yicha filtr."""
-    if not brand or brand == "all":
-        return True
+def _train_matches_single_brand(train: dict, brand: str) -> bool:
     blob = f"{train.get('brand') or ''} {train.get('type') or ''}".lower()
     if brand == "afrosiyob":
         return "afrosiyob" in blob or "афроси" in blob
@@ -196,7 +208,23 @@ def train_matches_brand(train: dict, brand: str | None) -> bool:
             x in blob
             for x in ("скор", "скорый", "tez", "пассажир", "yo'lovchi", "yoʻlovchi", "yolovchi")
         )
-    return True
+    return False
+
+
+def train_matches_brand_multi(train: dict, spec: str | None) -> bool:
+    sp = normalize_train_brand_spec(spec) if spec else "all"
+    if sp == "all":
+        return True
+    return any(_train_matches_single_brand(train, p.strip()) for p in sp.split(",") if p.strip())
+
+
+def car_matches_comfort_multi(car_type_name: str | None, spec: str | None) -> bool:
+    sp = normalize_comfort_spec(spec) if spec else "all"
+    if sp == "all":
+        return True
+    return any(
+        car_matches_comfort(car_type_name, p.strip()) for p in sp.split(",") if p.strip()
+    )
 
 
 def car_matches_comfort(car_type_name: str | None, comfort: str | None) -> bool:
@@ -295,12 +323,13 @@ def extract_available(
         return available
 
     tn_filter = str(train_number).strip() if train_number else None
-    tb = (train_brand or "all").strip().lower() if train_brand else "all"
+    cc_spec = normalize_comfort_spec(comfort_class)
+    tb_spec = normalize_train_brand_spec(train_brand)
 
     for train in trains:
         if tn_filter and str(train.get("number", "")).strip() != tn_filter:
             continue
-        if not train_matches_brand(train, tb):
+        if not train_matches_brand_multi(train, tb_spec):
             continue
 
         dep = _parse_time(train.get("departureDate") or train.get("departureTime"))
@@ -314,7 +343,7 @@ def extract_available(
             if free <= 0:
                 continue
             cname = car.get("carTypeName", "")
-            if not car_matches_comfort(cname, comfort_class):
+            if not car_matches_comfort_multi(cname, cc_spec):
                 continue
             price = next(
                 (t.get("tariff") for t in car.get("tariffs", []) if t.get("tariff")),
@@ -355,22 +384,24 @@ def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
     time_filter = ""
     if sub["time_from"] or sub["time_to"]:
         time_filter = f"  ⏰ {sub['time_from'] or '00:00'} — {sub['time_to'] or '23:59'}"
-    cc = subscription_comfort_class(sub)
+    cc_spec = subscription_comfort_spec(sub)
     comfort_filter = ""
-    if cc != "all":
+    if cc_spec != "all":
         labels = {"economy": "Ekonom", "business": "Business", "vip": "VIP"}
-        comfort_filter = f"  🪑 {labels.get(cc, cc)}"
+        parts = [labels.get(p.strip(), p.strip()) for p in cc_spec.split(",") if p.strip()]
+        comfort_filter = f"  🪑 {', '.join(parts)}"
 
-    tb = subscription_train_brand(sub)
+    tb_spec = subscription_train_brand_spec(sub)
     brand_filter = ""
-    if tb != "all":
+    if tb_spec != "all":
         bl = {
             "afrosiyob": "Afrosiyob",
             "sharq": "Sharq",
             "talgo": "Talgo",
             "express": "Tezkor",
         }
-        brand_filter = f"  🚄 {bl.get(tb, tb)}"
+        parts = [bl.get(p.strip(), p.strip()) for p in tb_spec.split(",") if p.strip()]
+        brand_filter = f"  🚄 {', '.join(parts)}"
 
     stn = subscription_train_number(sub)
     lines = [
@@ -404,9 +435,9 @@ async def process_subscription(sub: sqlite3.Row) -> None:
             data,
             sub["time_from"],
             sub["time_to"],
-            subscription_comfort_class(sub),
+            sub["comfort_class"],
             subscription_train_number(sub),
-            subscription_train_brand(sub),
+            sub["train_brand"],
         )
 
         if trains:
@@ -587,25 +618,34 @@ class SubscribeRequest(BaseModel):
     time_from: str | None = None
     time_to:   str | None = None
     auto_buy:  bool = False
-    comfort_class: str = "all"  # all | economy | business | vip
+    comfort_class: str = "all"  # all yoki vergul: economy,business
     train_number: str | None = None  # NULL = butun yo'nalish; raqam = faqat shu reys
-    train_brand: str | None = None  # all | afrosiyob | sharq | talgo | express
+    train_brand: str | None = None  # vergul: afrosiyob,sharq
 
     @field_validator("train_brand", mode="before")
     @classmethod
     def _tbrand(cls, v):
-        if v is None or str(v).strip() == "":
+        if v is None:
             return None
-        s = str(v).strip().lower()
-        if s == "all":
+        if isinstance(v, list):
+            s = ",".join(str(x).strip() for x in v if str(x).strip())
+        else:
+            s = str(v).strip()
+        if not s or s.lower() == "all":
             return None
-        return s if s in ("afrosiyob", "sharq", "talgo", "express") else None
+        norm = normalize_train_brand_spec(s)
+        return None if norm == "all" else norm
 
     @field_validator("comfort_class", mode="before")
     @classmethod
     def _comfort(cls, v):
-        s = (str(v) if v is not None else "all").strip().lower()
-        return s if s in ("all", "economy", "business", "vip") else "all"
+        if v is None:
+            return "all"
+        if isinstance(v, list):
+            s = ",".join(str(x).strip() for x in v if str(x).strip())
+        else:
+            s = str(v).strip()
+        return normalize_comfort_spec(s if s else "all")
 
     @field_validator("train_number", mode="before")
     @classmethod
@@ -653,8 +693,9 @@ async def subscribe(req: SubscribeRequest):
             """SELECT id FROM subscriptions
                WHERE user_id=? AND from_code=? AND to_code=? AND date=? AND is_active=1
                AND IFNULL(train_number, '') = IFNULL(?, '')
-               AND IFNULL(train_brand, '') = IFNULL(?, '')""",
-            (req.user_id, req.from_code, req.to_code, req.date, tn, tbrand),
+               AND IFNULL(train_brand, '') = IFNULL(?, '')
+               AND IFNULL(comfort_class, 'all') = ?""",
+            (req.user_id, req.from_code, req.to_code, req.date, tn, tbrand, req.comfort_class),
         ).fetchone()
 
         if existing:

@@ -72,8 +72,7 @@ function trainBrandLabel(brandId) {
   return o ? o.label : "Barcha poyezdlar";
 }
 
-function trainMatchesBrand(train, brandId) {
-  if (!brandId || brandId === "all") return true;
+function trainMatchesSingleBrand(train, brandId) {
   const blob = `${train.brand || ""} ${train.type || ""}`.toLowerCase();
   if (brandId === "afrosiyob") {
     return blob.includes("afrosiyob") || blob.includes("афроси");
@@ -87,7 +86,13 @@ function trainMatchesBrand(train, brandId) {
   if (brandId === "express") {
     return ["скор", "скорый", "tez", "пассажир", "yo'lovchi", "yoʻlovchi", "yolovchi"].some(k => blob.includes(k));
   }
-  return true;
+  return false;
+}
+
+/** Vergul bilan bir nechta tur: "afrosiyob,sharq" */
+function trainMatchesBrandCsv(train, csv) {
+  if (!csv || csv === "all") return true;
+  return csv.split(",").some(p => trainMatchesSingleBrand(train, p.trim()));
 }
 
 function comfortLabel(comfortId) {
@@ -112,12 +117,62 @@ function carMatchesComfort(carTypeName, comfort) {
   return true;
 }
 
+function carMatchesComfortCsv(carTypeName, csv) {
+  if (!csv || csv === "all") return true;
+  return csv.split(",").some(p => carMatchesComfort(carTypeName, p.trim()));
+}
+
 /** Vagon nomi qaysi qulaylik guruhi — foydalanuvchiga qisqa matn */
 function comfortBucketLabel(carTypeName) {
   if (carMatchesComfort(carTypeName, "economy")) return "Ekonom";
   if (carMatchesComfort(carTypeName, "business")) return "Business";
   if (carMatchesComfort(carTypeName, "vip")) return "VIP";
   return carTypeName || "Boshqa";
+}
+
+function normalizeComfortCsv(s) {
+  const valid = ["economy", "business", "vip"];
+  const parts = String(s || "").toLowerCase().split(",").map(x => x.trim()).filter(x => valid.includes(x));
+  return parts.length ? [...new Set(parts)].sort().join(",") : "all";
+}
+
+function normalizeTrainBrandCsv(s) {
+  const valid = ["afrosiyob", "sharq", "talgo", "express"];
+  const parts = String(s || "").toLowerCase().split(",").map(x => x.trim()).filter(x => valid.includes(x));
+  return parts.length ? [...new Set(parts)].sort().join(",") : "all";
+}
+
+const MULTI_LABEL_SEP = " va ";
+
+function comfortCsvLabel() {
+  if (!state.comfortCsv || state.comfortCsv === "all") return "Barcha turlar";
+  return state.comfortCsv.split(",").map(p => comfortLabel(p.trim())).join(MULTI_LABEL_SEP);
+}
+
+function trainBrandCsvLabel() {
+  if (!state.trainBrandCsv || state.trainBrandCsv === "all") return "Barcha poyezdlar";
+  return state.trainBrandCsv.split(",").map(p => trainBrandLabel(p.trim())).join(MULTI_LABEL_SEP);
+}
+
+function comfortCsvLabelFromServer(raw) {
+  if (!raw || raw === "all") return "";
+  return String(raw).split(",").map(x => comfortLabel(x.trim())).join(MULTI_LABEL_SEP);
+}
+
+function trainBrandCsvLabelFromServer(raw) {
+  if (!raw || raw === "all") return "";
+  return String(raw).split(",").map(x => trainBrandLabel(x.trim())).join(MULTI_LABEL_SEP);
+}
+
+function subKeyFromServerRow(s) {
+  return subKeyOf(
+    s.from_code,
+    s.to_code,
+    s.date,
+    s.train_number,
+    s.train_brand ?? "all",
+    s.comfort_class ?? "all"
+  );
 }
 
 function trainHasAnyFreeSeat(train) {
@@ -130,8 +185,8 @@ const state = {
   toCode:   null, toName:   null,
   date:     null, dateLabel: null,
   timeFrom: null, timeTo: null,   // "08:00" formatida, null = filtr yo'q
-  trainBrand: "all",               // all | afrosiyob | sharq | talgo | express
-  comfortClass: "all",             // all | economy | business | vip
+  trainBrandCsv: "all",            // vergul: afrosiyob,sharq
+  comfortCsv: "all",              // vergul: economy,business
   pickerTarget: null,
   screenStack: ["screenMain"],
   activeSubs: {},
@@ -312,51 +367,133 @@ function confirmTime() {
   showScreen("screenMain");
 }
 
-// ───────────────────────────── JOY TURI (COMFORT) ────────────────────────────
+let _tmpTrainBrandIds = new Set(["all"]);
+let _tmpComfortIds = new Set(["all"]);
+
+function trainBrandOptionSelected(id) {
+  if (_tmpTrainBrandIds.has("all")) return id === "all";
+  return _tmpTrainBrandIds.has(id);
+}
+
+function comfortOptionSelected(id) {
+  if (_tmpComfortIds.has("all")) return id === "all";
+  return _tmpComfortIds.has(id);
+}
+
+function trainBrandTmpSummaryLine() {
+  if (_tmpTrainBrandIds.has("all")) return "Hozircha: barcha poyezdlar (filtr yo'q)";
+  const ids = [..._tmpTrainBrandIds].filter(x => x !== "all").sort();
+  if (!ids.length) return "Hozircha: barcha poyezdlar (filtr yo'q)";
+  return `Tanlangan: ${ids.map(id => trainBrandLabel(id)).join(MULTI_LABEL_SEP)} (${ids.length} ta tur)`;
+}
+
+function comfortTmpSummaryLine() {
+  if (_tmpComfortIds.has("all")) return "Hozircha: barcha joy turlari";
+  const ids = [..._tmpComfortIds].filter(x => x !== "all").sort();
+  if (!ids.length) return "Hozircha: barcha joy turlari";
+  return `Tanlangan: ${ids.map(id => comfortLabel(id)).join(MULTI_LABEL_SEP)} (${ids.length} ta tur)`;
+}
+
+// ───────────────────────────── POYEZD TURI (bir nechta) ─────────────────────
 function openTrainBrandPicker() {
+  if (!state.trainBrandCsv || state.trainBrandCsv === "all") {
+    _tmpTrainBrandIds = new Set(["all"]);
+  } else {
+    _tmpTrainBrandIds = new Set(state.trainBrandCsv.split(",").map(x => x.trim()).filter(Boolean));
+  }
   renderTrainBrandPicker();
   showScreen("screenTrainBrand");
 }
 
 function renderTrainBrandPicker() {
-  document.getElementById("trainBrandOptions").innerHTML = TRAIN_BRAND_OPTIONS.map(o => `
-    <div class="comfort-option ${state.trainBrand === o.id ? "selected" : ""}"
-         onclick="selectTrainBrand('${o.id}')">
-      <span class="comfort-option-icon">${o.icon}</span>
+  const sum = document.getElementById("trainBrandPickSummary");
+  if (sum) sum.textContent = trainBrandTmpSummaryLine();
+  document.getElementById("trainBrandOptions").innerHTML = TRAIN_BRAND_OPTIONS.map(o => {
+    const sel = trainBrandOptionSelected(o.id);
+    return `
+    <button type="button" class="comfort-option ${sel ? "selected" : ""}" data-train-brand="${o.id}">
+      <span class="comfort-option-icon" aria-hidden="true">${o.icon}</span>
       <div class="comfort-option-text">
         <div class="comfort-option-title">${o.label}</div>
         <div class="comfort-option-desc">${o.hint}</div>
       </div>
-    </div>`).join("");
+      <span class="comfort-option-tick" aria-hidden="true">${sel ? "✓" : ""}</span>
+    </button>`;
+  }).join("");
 }
 
-function selectTrainBrand(id) {
-  state.trainBrand = TRAIN_BRAND_OPTIONS.some(x => x.id === id) ? id : "all";
-  setField("trainBrandValue", trainBrandLabel(state.trainBrand));
+function toggleTrainBrandOption(id) {
+  if (id === "all") {
+    _tmpTrainBrandIds = new Set(["all"]);
+  } else {
+    _tmpTrainBrandIds.delete("all");
+    if (_tmpTrainBrandIds.has(id)) _tmpTrainBrandIds.delete(id);
+    else _tmpTrainBrandIds.add(id);
+    if (_tmpTrainBrandIds.size === 0) _tmpTrainBrandIds = new Set(["all"]);
+  }
+  renderTrainBrandPicker();
+}
+
+function confirmTrainBrandPicker() {
+  if (_tmpTrainBrandIds.has("all") || _tmpTrainBrandIds.size === 0) {
+    state.trainBrandCsv = "all";
+  } else {
+    const ids = [..._tmpTrainBrandIds].filter(x => x !== "all");
+    state.trainBrandCsv = normalizeTrainBrandCsv(ids.join(","));
+  }
+  setField("trainBrandValue", trainBrandCsvLabel());
   state.screenStack = state.screenStack.filter(s => s !== "screenTrainBrand");
   showScreen("screenMain");
 }
 
+// ───────────────────────────── JOY TURI (bir nechta) ───────────────────────────
 function openComfortPicker() {
+  if (!state.comfortCsv || state.comfortCsv === "all") {
+    _tmpComfortIds = new Set(["all"]);
+  } else {
+    _tmpComfortIds = new Set(state.comfortCsv.split(",").map(x => x.trim()).filter(Boolean));
+  }
   renderComfortPicker();
   showScreen("screenComfort");
 }
 
 function renderComfortPicker() {
-  document.getElementById("comfortOptions").innerHTML = COMFORT_OPTIONS.map(o => `
-    <div class="comfort-option ${state.comfortClass === o.id ? "selected" : ""}"
-         onclick="selectComfort('${o.id}')">
-      <span class="comfort-option-icon">${o.icon}</span>
+  const sum = document.getElementById("comfortPickSummary");
+  if (sum) sum.textContent = comfortTmpSummaryLine();
+  document.getElementById("comfortOptions").innerHTML = COMFORT_OPTIONS.map(o => {
+    const sel = comfortOptionSelected(o.id);
+    return `
+    <button type="button" class="comfort-option ${sel ? "selected" : ""}" data-comfort-id="${o.id}">
+      <span class="comfort-option-icon" aria-hidden="true">${o.icon}</span>
       <div class="comfort-option-text">
         <div class="comfort-option-title">${o.label}</div>
         <div class="comfort-option-desc">${o.hint}</div>
       </div>
-    </div>`).join("");
+      <span class="comfort-option-tick" aria-hidden="true">${sel ? "✓" : ""}</span>
+    </button>`;
+  }).join("");
 }
 
-function selectComfort(id) {
-  state.comfortClass = COMFORT_OPTIONS.some(x => x.id === id) ? id : "all";
-  setField("comfortValue", comfortLabel(state.comfortClass));
+function toggleComfortOption(id) {
+  if (id === "all") {
+    _tmpComfortIds = new Set(["all"]);
+  } else {
+    _tmpComfortIds.delete("all");
+    if (_tmpComfortIds.has(id)) _tmpComfortIds.delete(id);
+    else _tmpComfortIds.add(id);
+    if (_tmpComfortIds.size === 0) _tmpComfortIds = new Set(["all"]);
+  }
+  renderComfortPicker();
+}
+
+function confirmComfortPicker() {
+  if (_tmpComfortIds.has("all") || _tmpComfortIds.size === 0) {
+    state.comfortCsv = "all";
+  } else {
+    const ids = [..._tmpComfortIds].filter(x => x !== "all");
+    state.comfortCsv = normalizeComfortCsv(ids.join(","));
+  }
+  setField("comfortValue", comfortCsvLabel());
   state.screenStack = state.screenStack.filter(s => s !== "screenComfort");
   showScreen("screenMain");
 }
@@ -380,14 +517,14 @@ function updateSearchBtn() {
 }
 
 async function showAllComfortAndRescan() {
-  state.comfortClass = "all";
-  setField("comfortValue", comfortLabel("all"));
+  state.comfortCsv = "all";
+  setField("comfortValue", comfortCsvLabel());
   await doSearch();
 }
 
 async function showAllTrainBrandsAndRescan() {
-  state.trainBrand = "all";
-  setField("trainBrandValue", trainBrandLabel("all"));
+  state.trainBrandCsv = "all";
+  setField("trainBrandValue", trainBrandCsvLabel());
   await doSearch();
 }
 
@@ -413,16 +550,16 @@ function renderResults(data) {
   let trainsRaw = [];
   try { trainsRaw = data.data.directions.forward.trains || []; } catch { trainsRaw = []; }
 
-  const trains = trainsRaw.filter(t => trainMatchesBrand(t, state.trainBrand));
+  const trains = trainsRaw.filter(t => trainMatchesBrandCsv(t, state.trainBrandCsv));
 
   const timeInfo = (state.timeFrom || state.timeTo)
     ? `&nbsp;⏰ ${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}`
     : "";
-  const brandInfo = state.trainBrand && state.trainBrand !== "all"
-    ? `&nbsp;🚄 ${trainBrandLabel(state.trainBrand)}`
+  const brandInfo = state.trainBrandCsv && state.trainBrandCsv !== "all"
+    ? `&nbsp;🚄 ${trainBrandCsvLabel()}`
     : "";
-  const comfortInfo = state.comfortClass && state.comfortClass !== "all"
-    ? `&nbsp;🪑 ${comfortLabel(state.comfortClass)}`
+  const comfortInfo = state.comfortCsv && state.comfortCsv !== "all"
+    ? `&nbsp;🪑 ${comfortCsvLabel()}`
     : "";
   document.getElementById("resultsHeader").innerHTML = `
     <div class="route-info">
@@ -432,7 +569,7 @@ function renderResults(data) {
     </div>
     <div class="date-info">📅 ${state.dateLabel}${timeInfo}${brandInfo}${comfortInfo}</div>`;
 
-  const routeSubKey = subKeyOf(state.fromCode, state.toCode, state.date, "", state.trainBrand);
+  const routeSubKey = subKeyOf(state.fromCode, state.toCode, state.date, "", state.trainBrandCsv, state.comfortCsv);
   const isRouteWatching = !!state.activeSubs[routeSubKey];
 
   // Vaqt filtri (daqiqalar — "9:30" satr taqqosi xatolari yo'q); vaqt API UTC bo'lsa Toshkentga aylantiriladi
@@ -455,7 +592,7 @@ function renderResults(data) {
     .map(t => ({
       ...t,
       cars: (t.cars || []).filter(c =>
-        c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+        c.freeSeats > 0 && carMatchesComfortCsv(c.carTypeName, state.comfortCsv)
       ),
     }))
     .filter(t => t.cars.length > 0);
@@ -464,12 +601,12 @@ function renderResults(data) {
 
   const noTrainsAtAll = trainsRaw.length === 0;
   const noBrandMatch =
-    trainsRaw.length > 0 && trains.length === 0 && state.trainBrand !== "all";
+    trainsRaw.length > 0 && trains.length === 0 && state.trainBrandCsv !== "all";
   const noInTimeRange = timeFilteredTrains.length === 0 && trains.length > 0;
 
   function trainHasComfortSeats(train) {
     return (train.cars || []).some(c =>
-      c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+      c.freeSeats > 0 && carMatchesComfortCsv(c.carTypeName, state.comfortCsv)
     );
   }
 
@@ -480,7 +617,7 @@ function renderResults(data) {
       msg = "Bu sana uchun ushbu yo'nalishda hozircha reys ko'rinmayapti. Pastdagi tugmalar bilan butun yo'nalish bo'yicha kuzating — bot har 10 daqiqada tekshiradi.";
     } else if (noBrandMatch) {
       icon = "🚄"; title = "Bu turdagi poyezd yo'q";
-      msg = `Yo'nalishda reyslar bor, lekin <b>${trainBrandLabel(state.trainBrand)}</b> turiga mos poyezd yo'q. Filtrni o'zgartiring yoki barcha poyezdlarni ko'ring.`;
+      msg = `Yo'nalishda reyslar bor, lekin <b>${trainBrandCsvLabel()}</b> tanlovlari uchun mos poyezd yo'q. Filtrni o'zgartiring yoki barcha poyezdlarni ko'ring.`;
     } else {
       icon = "⏰"; title = "Bu vaqtda poyezd yo'q";
       msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida jo'nash topilmadi. Vaqt oralig'ini kengaytiring yoki kuzatuvni yoqing.`;
@@ -498,14 +635,14 @@ function renderResults(data) {
       </div>`;
   } else {
     const comfortBlocked =
-      state.comfortClass !== "all" &&
+      state.comfortCsv !== "all" &&
       rawAvailable.length > 0 &&
       availableTrains.length === 0;
     const routeBanner = comfortBlocked
       ? `<div class="comfort-mismatch-route-banner">
           <span class="comfort-mismatch-route-icon">🪑</span>
           <div class="comfort-mismatch-route-text">
-            <strong>${comfortLabel(state.comfortClass)}</strong> tanlangan — shu turda bo'sh joy topilmadi,
+            <strong>${comfortCsvLabel()}</strong> tanlangan — shu turlarda bo'sh joy topilmadi,
             lekin reyslarda <strong>boshqa vagon turlarida</strong> joy bor (masalan, Business / kupe).
           </div>
           <button type="button" class="comfort-mismatch-route-btn" onclick="showAllComfortAndRescan()">Barcha turlarni ko'rsatish</button>
@@ -587,7 +724,7 @@ function buildTrainCard(train) {
   const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
   const brand = train.brand || train.type || "";
   const avail = (train.cars || []).filter(c =>
-    c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+    c.freeSeats > 0 && carMatchesComfortCsv(c.carTypeName, state.comfortCsv)
   );
 
   const seatsHtml = avail.map(car => {
@@ -698,7 +835,7 @@ function buildTrainCardOtherComfort(train) {
         </div>
       </div>
       <p class="comfort-filter-hint">
-        <strong>${comfortLabel(state.comfortClass)}</strong> filtri yoqilgan — shu turda joy yo'q.
+        <strong>${comfortCsvLabel()}</strong> filtri yoqilgan — shu turlarda joy yo'q.
         Boshqa turlarda joy bor: <strong>${bucketsHint}</strong>.
       </p>
       <div class="seats-list">${seatsHtml}</div>
@@ -714,7 +851,7 @@ function buildSoldOutTrainCard(train) {
   const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
   const brand = train.brand || train.type || "";
   const num   = String(train.number ?? "").trim();
-  const subKey = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrand);
+  const subKey = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrandCsv, state.comfortCsv);
   const isW = !!state.activeSubs[subKey];
 
   return `
@@ -770,14 +907,14 @@ function mountRouteWatchSection(routeSubKey, isWatching) {
 
 function subscribeTrainWatch(trainNumber, autoBuy) {
   subscribe(
-    subKeyOf(state.fromCode, state.toCode, state.date, trainNumber, state.trainBrand),
+    subKeyOf(state.fromCode, state.toCode, state.date, trainNumber, state.trainBrandCsv, state.comfortCsv),
     autoBuy,
     trainNumber
   );
 }
 
 function unsubscribeTrain(trainNumber) {
-  unsubscribe(subKeyOf(state.fromCode, state.toCode, state.date, trainNumber, state.trainBrand));
+  unsubscribe(subKeyOf(state.fromCode, state.toCode, state.date, trainNumber, state.trainBrandCsv, state.comfortCsv));
 }
 
 // ───────────────────────────── SUBSCRIBE / UNSUBSCRIBE ───────────────────────
@@ -801,9 +938,9 @@ async function subscribe(subKey, autoBuy = false, trainNumber = null) {
         time_from:  state.timeFrom || null,
         time_to:    state.timeTo   || null,
         auto_buy:   autoBuy,
-        comfort_class: state.comfortClass || "all",
+        comfort_class: state.comfortCsv === "all" ? "all" : state.comfortCsv,
         train_number: tn,
-        train_brand: state.trainBrand === "all" ? null : state.trainBrand,
+        train_brand: state.trainBrandCsv === "all" ? null : state.trainBrandCsv,
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
@@ -847,14 +984,14 @@ async function unsubscribe(subKey) {
 }
 
 function refreshWatchUI(changedSubKey) {
-  const routeKey = subKeyOf(state.fromCode, state.toCode, state.date, "", state.trainBrand);
+  const routeKey = subKeyOf(state.fromCode, state.toCode, state.date, "", state.trainBrandCsv, state.comfortCsv);
   const isRoute = !!state.activeSubs[routeKey];
   const sec = document.querySelector(".route-watch-section");
   if (sec) sec.outerHTML = mountRouteWatchSection(routeKey, isRoute);
   document.querySelectorAll(".train-card-soldout").forEach(card => {
     const enc = card.getAttribute("data-train-num") || "";
     const num = decodeURIComponent(enc);
-    const sk = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrand);
+    const sk = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrandCsv, state.comfortCsv);
     const box = card.querySelector(".train-soldout-actions");
     if (box) {
       box.innerHTML = soldOutTrainActionsHtml(JSON.stringify(num), !!state.activeSubs[sk]);
@@ -896,25 +1033,28 @@ function renderSubscriptions(subs) {
 
   // Refresh local cache
   subs.forEach(s => {
-    state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand)] = s.id;
+    state.activeSubs[subKeyFromServerRow(s)] = s.id;
   });
 
   container.innerHTML = `
     <p class="subs-section-title">${subs.length} ta faol kuzatuv</p>
-    ${subs.map(s => `
+    ${subs.map(s => {
+      const tbL = trainBrandCsvLabelFromServer(s.train_brand);
+      const ccL = comfortCsvLabelFromServer(s.comfort_class);
+      return `
       <div class="sub-card" id="sub-${s.id}">
         <div class="sub-icon">🚆</div>
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
-          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${s.train_brand && s.train_brand !== "all" ? `&nbsp;🚄 ${trainBrandLabel(s.train_brand)}` : ""}${s.comfort_class && s.comfort_class !== "all" ? `&nbsp;🪑 ${comfortLabel(s.comfort_class)}` : ""}</div>
+          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${tbL ? `&nbsp;🚄 ${tbL}` : ""}${ccL ? `&nbsp;🪑 ${ccL}` : ""}</div>
           <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Faqat xabar"} (har 10 daqiqa)</span>
           <div class="sub-actions">
             ${Number(s.auto_buy) ? `<button type="button" class="sub-action-btn" onclick="disableSubAutoBuy(${s.id})">🤖 Avtoni o'chirish</button>` : ""}
-            <button type="button" class="sub-action-btn sub-action-danger" onclick='deleteSubFromList(${s.id},${JSON.stringify(subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand))})'>🔕 Kuzatuvni to'xtatish</button>
+            <button type="button" class="sub-action-btn sub-action-danger" onclick='deleteSubFromList(${s.id},${JSON.stringify(subKeyFromServerRow(s))})'>🔕 Kuzatuvni to'xtatish</button>
           </div>
         </div>
-      </div>
-    `).join("")}`;
+      </div>`;
+    }).join("")}`;
 }
 
 async function disableSubAutoBuy(subId) {
@@ -1019,7 +1159,7 @@ async function loadActiveSubs() {
     const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
     state.activeSubs = {};
     (res.subscriptions || []).forEach(s => {
-      state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date, s.train_number, s.train_brand)] = s.id;
+      state.activeSubs[subKeyFromServerRow(s)] = s.id;
     });
     updateBellBadge();
   } catch { /* silent */ }
@@ -1041,14 +1181,21 @@ async function apiFetch(path, options = {}) {
   return resp.json();
 }
 
-function subKeyOf(fromCode, toCode, date, trainNumber, trainBrand) {
+function subKeyOf(fromCode, toCode, date, trainNumber, trainBrandCsv, comfortCsv) {
   const t = trainNumber != null && String(trainNumber).trim() !== ""
     ? String(trainNumber).trim()
     : "";
-  const b = trainBrand != null && String(trainBrand).trim() !== "" && String(trainBrand).toLowerCase() !== "all"
-    ? String(trainBrand).trim().toLowerCase()
-    : "";
-  return `${fromCode}|${toCode}|${date}|${t}|${b}`;
+  let b = "";
+  if (trainBrandCsv != null && String(trainBrandCsv).trim() !== "") {
+    const nb = normalizeTrainBrandCsv(trainBrandCsv);
+    if (nb !== "all") b = nb;
+  }
+  let c = "";
+  if (comfortCsv != null && String(comfortCsv).trim() !== "") {
+    const nc = normalizeComfortCsv(comfortCsv);
+    if (nc !== "all") c = nc;
+  }
+  return `${fromCode}|${toCode}|${date}|${t}|${b}|${c}`;
 }
 
 function fmtDate(d) {
@@ -1199,6 +1346,48 @@ function requestBuyTicket(train) {
 }
 
 // ───────────────────────────── INIT ──────────────────────────────────────────
+/** Sensor: pointerdown + preventDefault — dublikat click oldini oladi. Sichqoncha: faqat click. */
+function attachMultiPickerToggle(root, dataAttr, toggleFn) {
+  if (!root || root.dataset.delegated) return;
+  root.dataset.delegated = "1";
+  const hasPE = typeof PointerEvent !== "undefined";
+  if (hasPE) {
+    root.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        const btn = e.target.closest(`[${dataAttr}]`);
+        if (!btn || !root.contains(btn)) return;
+        if (e.pointerType === "touch" || e.pointerType === "pen") {
+          e.preventDefault();
+          toggleFn(btn.getAttribute(dataAttr));
+        }
+      },
+      { passive: false }
+    );
+  }
+  root.addEventListener("click", (e) => {
+    if (hasPE && e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
+    const btn = e.target.closest(`[${dataAttr}]`);
+    if (!btn || !root.contains(btn)) return;
+    toggleFn(btn.getAttribute(dataAttr));
+  });
+}
+
+function setupMultiPickerDelegation() {
+  attachMultiPickerToggle(
+    document.getElementById("trainBrandOptions"),
+    "data-train-brand",
+    toggleTrainBrandOption
+  );
+  attachMultiPickerToggle(
+    document.getElementById("comfortOptions"),
+    "data-comfort-id",
+    toggleComfortOption
+  );
+}
+
+setupMultiPickerDelegation();
 updateSearchBtn();
 loadActiveSubs();
 loadProfile();

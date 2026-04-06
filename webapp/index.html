@@ -123,7 +123,7 @@
           <span class="comfort-icon-emoji">🚄</span>
         </div>
         <div class="field-content">
-          <span class="field-label">Poyezd turi</span>
+            <span class="field-label">Poyezd turi (bir nechta)</span>
           <span class="field-value selected" id="trainBrandValue">Barcha poyezdlar</span>
         </div>
         <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -197,16 +197,20 @@
   <!-- ===== TRAIN BRAND PICKER ===== -->
   <div class="screen" id="screenTrainBrand">
     <div class="comfort-picker-wrap">
-      <p class="comfort-picker-hint">Qaysi turdagi poyezdlar ko'rsatilsin (Afrosiyob, Sharq, ...)</p>
+      <p class="comfort-picker-hint">Bir nechta tur tanlang (har birida ✓). Saqlash uchun pastdagi «Tasdiqlash»ni bosing. Orqaga — bekor (oldingi tanlov o'zgarmaydi).</p>
+      <p class="comfort-picker-summary" id="trainBrandPickSummary"></p>
       <div class="comfort-options" id="trainBrandOptions"></div>
+      <button type="button" class="time-confirm-btn" onclick="confirmTrainBrandPicker()">Tasdiqlash</button>
     </div>
   </div>
 
   <!-- ===== COMFORT CLASS PICKER ===== -->
   <div class="screen" id="screenComfort">
     <div class="comfort-picker-wrap">
-      <p class="comfort-picker-hint">Qaysi turdagi bo'sh joylar ko'rsatilsin</p>
+      <p class="comfort-picker-hint">Bir nechta tur tanlang (✓). Saqlash: «Tasdiqlash». Orqaga — bekor.</p>
+      <p class="comfort-picker-summary" id="comfortPickSummary"></p>
       <div class="comfort-options" id="comfortOptions"></div>
+      <button type="button" class="time-confirm-btn" onclick="confirmComfortPicker()">Tasdiqlash</button>
     </div>
   </div>
 
@@ -269,6 +273,6 @@
   <!-- ===== TOAST ===== -->
   <div class="toast" id="toast"></div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260405c"></script>
 </body>
 </html>
