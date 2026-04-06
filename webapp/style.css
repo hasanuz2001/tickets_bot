@@ -538,6 +538,13 @@ body {
   font-size: 13px; font-weight: 600;
   cursor: pointer; text-decoration: none;
 }
+.buy-btn-auto {
+  margin-top: 8px;
+  margin-bottom: 6px;
+  background: linear-gradient(135deg, #5856d6 0%, #7b6cf6 100%);
+  color: #fff;
+}
+.buy-btn-auto:active { opacity: 0.9; }
 
 /* ===== INLINE BUY BUTTON ===== */
 .inline-buy-btn {

@@ -493,6 +493,21 @@ function buildTrainCard(train) {
     </div>`;
   }).join("");
 
+  const firstCar = avail[0];
+  const autoPayload = firstCar
+    ? encodeURIComponent(JSON.stringify({
+        number:   train.number || "",
+        brand,
+        dep,
+        arr,
+        car_type: firstCar.carTypeName || "Vagon",
+      }))
+    : "";
+  const autoExtra =
+    avail.length > 1
+      ? " Boshqa vagon uchun qatordagi tugmalardan foydalaning."
+      : "";
+
   return `
     <div class="train-card">
       <div class="train-header">
@@ -507,8 +522,9 @@ function buildTrainCard(train) {
         </div>
       </div>
       <div class="seats-list">${seatsHtml}</div>
-      <p class="train-card-hint">Bo'sh joy bor — saytda o'zingiz sotib oling yoki vagon qatoridagi <b>🎫 Olish</b> orqali xizmat.</p>
-      <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish</button>
+      <p class="train-card-hint">🎫 <b>Olish</b> — chatda tasdiqlash. 🤖 <b>Avtomatik</b> — darhol server orqali; <b>Profil</b> to'ldirilgan bo'lishi kerak.${autoExtra}</p>
+      <button type="button" class="buy-btn buy-btn-auto" onclick='requestAutoBuyTicket(JSON.parse(decodeURIComponent("${autoPayload}")))'>🤖 Avtomatik sotib olish (${escHtmlText((firstCar && firstCar.carTypeName) || "vagon")})</button>
+      <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish (sayt)</button>
     </div>`;
 }
 
@@ -537,6 +553,17 @@ function buildTrainCardOtherComfort(train) {
     </div>`;
   }).join("");
 
+  const firstOther = avail[0];
+  const autoPayloadOther = firstOther
+    ? encodeURIComponent(JSON.stringify({
+        number:   train.number || "",
+        brand,
+        dep,
+        arr,
+        car_type: firstOther.carTypeName || "Vagon",
+      }))
+    : "";
+
   return `
     <div class="train-card train-card-other-comfort">
       <div class="train-header">
@@ -555,7 +582,8 @@ function buildTrainCardOtherComfort(train) {
         Boshqa turlarda joy bor: <strong>${bucketsHint}</strong>.
       </p>
       <div class="seats-list">${seatsHtml}</div>
-      <p class="train-card-hint">Quyidagi vagonlarda bo'sh joy bor — sotib olish yoki filtrni <b>Barcha turlar</b> qiling.</p>
+      <p class="train-card-hint">Quyidagi vagonlarda bo'sh joy bor. 🤖 Avtomatik — birinchi qatordagi vagon (${escHtmlText((firstOther && firstOther.carTypeName) || "")}).</p>
+      <button type="button" class="buy-btn buy-btn-auto" onclick='requestAutoBuyTicket(JSON.parse(decodeURIComponent("${autoPayloadOther}")))'>🤖 Avtomatik sotib olish (${escHtmlText((firstOther && firstOther.carTypeName) || "vagon")})</button>
       <button type="button" class="buy-btn buy-btn-secondary" onclick="showAllComfortAndRescan()">🎫 Barcha turlar bilan qayta qidirish</button>
       <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish (sayt)</button>
     </div>`;
@@ -875,6 +903,11 @@ function fmtDate(d) {
 
 function escQ(s) { return s.replace(/'/g, "\\'"); }
 
+/** Kartochka matnida HTML buzilishining oldini olish */
+function escHtmlText(s) {
+  return String(s ?? "").replace(/[<>]/g, "");
+}
+
 function showLoading(on, text = "Yuklanmoqda...") {
   document.getElementById("loadingText").textContent = text;
   document.getElementById("loadingOverlay").classList.toggle("active", on);
@@ -910,6 +943,56 @@ function openRailway() {
   const url = "https://eticket.railway.uz";
   if (tg) tg.openLink(url);
   else window.open(url, "_blank");
+}
+
+/** Server /api/purchase — tasdiqlashsiz, Playwright (RAILWAY_LOGIN + profil) */
+async function requestAutoBuyTicket(train) {
+  if (!TG_USER_ID) {
+    showToast("Iltimos, botni Telegram orqali oching.");
+    return;
+  }
+  const carType = (train && train.car_type) || "Vagon";
+  showLoading(true, "Buyurtma yuborilmoqda...");
+  try {
+    const resp = await fetch(`${API_BASE}/api/purchase`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id:      TG_USER_ID,
+        from_code:    state.fromCode,
+        to_code:      state.toCode,
+        from_name:    state.fromName,
+        to_name:      state.toName,
+        date:         state.date,
+        train_number: train.number || "",
+        train_brand:  train.brand || "",
+        dep_time:     train.dep || "",
+        arr_time:     train.arr || "",
+        car_type:     carType,
+      }),
+    });
+    let data = {};
+    try {
+      data = await resp.json();
+    } catch {
+      data = {};
+    }
+    if (!resp.ok) {
+      const d = data.detail;
+      const msg = typeof d === "string"
+        ? d
+        : Array.isArray(d)
+          ? d.map(e => e.msg || e).join(" ")
+          : `Xatolik (${resp.status})`;
+      showToast(msg);
+      return;
+    }
+    showToast("✅ Avtomatik xarid boshlandi. Natija Telegram chatga keladi.");
+  } catch {
+    showToast("Serverga ulanishda xatolik.");
+  } finally {
+    showLoading(false);
+  }
 }
 
 function requestBuyTicket(train) {
