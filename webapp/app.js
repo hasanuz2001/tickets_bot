@@ -344,8 +344,8 @@ function renderResults(data) {
     </div>
     <div class="date-info">📅 ${state.dateLabel}${timeInfo}${comfortInfo}</div>`;
 
-  const subKey = subKeyOf(state.fromCode, state.toCode, state.date);
-  const isWatching = !!state.activeSubs[subKey];
+  const routeSubKey = subKeyOf(state.fromCode, state.toCode, state.date);
+  const isRouteWatching = !!state.activeSubs[routeSubKey];
 
   // Vaqt filtri
   const inTimeRange = (train) => {
@@ -374,36 +374,34 @@ function renderResults(data) {
 
   const noTrainsAtAll   = trains.length === 0;
   const noInTimeRange   = timeFilteredTrains.length === 0 && trains.length > 0;
-  const timeFilteredEmpty = timeFilteredTrains.length === 0;
-  const noSeatsComfort  = !timeFilteredEmpty && rawAvailable.length > 0 && availableTrains.length === 0
-    && state.comfortClass !== "all";
-  const noSeatsRaw      = !timeFilteredEmpty && rawAvailable.length === 0;
 
-  if (noTrainsAtAll || noInTimeRange || noSeatsComfort || noSeatsRaw) {
+  function trainHasComfortSeats(train) {
+    return (train.cars || []).some(c =>
+      c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+    );
+  }
+
+  if (noTrainsAtAll || noInTimeRange) {
     let icon, title, msg;
     if (noTrainsAtAll) {
       icon = "🚫"; title = "Poyezd topilmadi";
-      msg = "Bu sana uchun ushbu yo'nalishda hozircha reys ko'rinmayapti. Bilet chiqishi yoki bo'sh joy paydo bo'lishi bilanoq bildirishnoma olish uchun pastdagi tugmani bosing — bot har 10 daqiqada tekshiradi va Telegramga xabar yuboradi.";
-    } else if (noInTimeRange) {
-      icon = "⏰"; title = "Bu vaqtda poyezd yo'q";
-      msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida jo'nash topilmadi. Vaqt oralig'ini kengaytirishingiz mumkin yoki shu filtr bilan kuzating — tanlangan vaqtda joy ochilishi bilanoq bildirishnoma yuboramiz (har 10 daqiqada).`;
-    } else if (noSeatsComfort) {
-      icon = "🪑"; title = "Bu joy turida bo'sh joy yo'q";
-      msg = `${comfortLabel(state.comfortClass)} uchun bo'sh joy topilmadi. "Barcha turlar"ni tanlang yoki boshqa tur bilan qidiring. Kuzatuvni yoqsangiz, kerakli turda joy ochilganda xabar beramiz.`;
+      msg = "Bu sana uchun ushbu yo'nalishda hozircha reys ko'rinmayapti. Pastdagi tugmalar bilan butun yo'nalish bo'yicha kuzating — bot har 10 daqiqada tekshiradi.";
     } else {
-      icon = "😕"; title = "Bo'sh o'rin yo'q";
-      msg = "Tanlangan vaqtda barcha vagonlarda joy band. Kuzatuvni yoqsangiz, bo'sh joy chiqishi bilan Telegram orqali bildirishnoma olasiz; \"Avtomatik sotib olish\" bo'lsa, bilet paydo bo'lishi bilan xaridga harakat qilinadi (har 10 daqiqada tekshiriladi).";
+      icon = "⏰"; title = "Bu vaqtda poyezd yo'q";
+      msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida jo'nash topilmadi. Vaqt oralig'ini kengaytiring yoki kuzatuvni yoqing.`;
     }
     html = `
       <div class="no-seats-banner">
         <div class="banner-icon">${icon}</div>
         <h3>${title}</h3>
         <p>${msg}</p>
-        ${buildBigWatchBtn(subKey, isWatching)}
+        ${mountRouteWatchSection(routeSubKey, isRouteWatching)}
       </div>`;
   } else {
-    // Show trains with seats
-    html = availableTrains.map(train => buildTrainCard(train, subKey, isWatching)).join("");
+    html = timeFilteredTrains.map(train => {
+      if (trainHasComfortSeats(train)) return buildTrainCard(train);
+      return buildSoldOutTrainCard(train);
+    }).join("");
   }
 
   html += `<button class="new-search-btn" onclick="resetToMain()">🔄 Yangi qidiruv</button>`;
@@ -427,11 +425,13 @@ function getBrandClass(brand) {
   return BRAND_CLASS[brand] || "brand-default";
 }
 
-function buildTrainCard(train, subKey, isWatching) {
+function buildTrainCard(train) {
   const dep   = parseTime(train.departureDate || train.departureTime);
   const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
   const brand = train.brand || train.type || "";
-  const avail = (train.cars || []).filter(c => c.freeSeats > 0);
+  const avail = (train.cars || []).filter(c =>
+    c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+  );
 
   const seatsHtml = avail.map(car => {
     const icon  = CAR_ICONS[car.carTypeName] || "🪑";
@@ -451,7 +451,7 @@ function buildTrainCard(train, subKey, isWatching) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
         <span class="seat-price">${price ? `${Number(price).toLocaleString()} so'm` : "—"}</span>
-        <button class="inline-buy-btn" onclick='requestBuyTicket(JSON.parse(decodeURIComponent("${encodeURIComponent(JSON.stringify({number:train.number||"",brand,dep,arr,car_type:car.carTypeName||"Vagon"}))}")))''>🎫 Olish</button>
+        <button class="inline-buy-btn" onclick='requestBuyTicket(JSON.parse(decodeURIComponent("${encodeURIComponent(JSON.stringify({number:train.number||"",brand,dep,arr,car_type:car.carTypeName||"Vagon"}))}")))' >🎫 Olish</button>
       </div>
     </div>`;
   }).join("");
@@ -470,31 +470,84 @@ function buildTrainCard(train, subKey, isWatching) {
         </div>
       </div>
       <div class="seats-list">${seatsHtml}</div>
+      <p class="train-card-hint">Bo'sh joy bor — saytda o'zingiz sotib oling yoki vagon qatoridagi <b>🎫 Olish</b> orqali xizmat.</p>
       <button class="buy-btn" onclick="openRailway()">🌐 O'zim sotib olish</button>
-      ${buildWatchBtn(subKey, isWatching)}
     </div>`;
 }
 
-function buildWatchBtn(subKey, isWatching) {
-  if (!TG_USER_ID) return "";
-  return isWatching
-    ? `<button class="watch-btn watching" onclick="unsubscribe('${subKey}')">✅ Kuzatilmoqda — bekor qilish</button>`
-    : `<button class="watch-btn auto-buy-btn" onclick="subscribe('${subKey}', true)">🤖 Avtomatik sotib olish</button>`;
+function buildSoldOutTrainCard(train) {
+  const dep   = parseTime(train.departureDate || train.departureTime);
+  const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
+  const brand = train.brand || train.type || "";
+  const num   = String(train.number ?? "").trim();
+  const tjson = JSON.stringify(num);
+  const subKey = subKeyOf(state.fromCode, state.toCode, state.date, num);
+  const isW = !!state.activeSubs[subKey];
+
+  return `
+    <div class="train-card train-card-soldout" data-train-num="${encodeURIComponent(num)}">
+      <div class="train-header">
+        <div class="train-times">
+          <span class="train-dep">${dep}</span>
+          <div class="train-duration"><span class="arrow-line"></span>→</div>
+          <span class="train-arr">${arr}</span>
+        </div>
+        <div class="train-meta">
+          <div class="train-brand ${getBrandClass(brand)}">${brand || "Poyezd"}</div>
+          <div class="train-num">№${num}</div>
+        </div>
+      </div>
+      <p class="soldout-note">Hozircha bo'sh joy yo'q</p>
+      <div class="train-soldout-actions">${soldOutTrainActionsHtml(tjson, isW)}</div>
+    </div>`;
 }
 
-function buildBigWatchBtn(subKey, isWatching) {
-  if (!TG_USER_ID) return `<p style="color:var(--tg-hint);font-size:12px">Telegram orqali oching.</p>`;
-  return isWatching
-    ? `<button class="big-watch-btn watching" onclick="unsubscribe('${subKey}')">✅ Kuzatilmoqda — bekor qilish</button>`
-    : `<button class="big-watch-btn" onclick="subscribe('${subKey}', true)">🤖 Avtomatik sotib olish</button>`;
+function soldOutTrainActionsHtml(trainNumberJson, isWatching) {
+  if (!TG_USER_ID) {
+    return `<p class="soldout-telegram-hint">Telegram orqali oching</p>`;
+  }
+  if (isWatching) {
+    return `<button type="button" class="watch-row-btn watching" onclick="unsubscribeTrain(${trainNumberJson})">✅ Kuzatilmoqda — bekor qilish</button>`;
+  }
+  return `
+    <button type="button" class="watch-row-btn notify" onclick="subscribeTrainWatch(${trainNumberJson}, false)">🔔 Bilet bo'lganda xabar berish</button>
+    <button type="button" class="watch-row-btn auto" onclick="subscribeTrainWatch(${trainNumberJson}, true)">🤖 Paydo bo'lganda sotib olish</button>`;
+}
+
+function buildRouteWatchSection(routeSubKey, isWatching) {
+  if (!TG_USER_ID) {
+    return `<p style="color:var(--tg-hint);font-size:12px">Telegram orqali oching</p>`;
+  }
+  const sk = JSON.stringify(routeSubKey);
+  if (isWatching) {
+    return `<button type="button" class="big-watch-btn watching" onclick="unsubscribe(${sk})">✅ Kuzatilmoqda — bekor qilish</button>`;
+  }
+  return `
+    <div class="route-watch-btns">
+      <button type="button" class="big-watch-btn notify" onclick="subscribe(${sk}, false)">🔔 Bilet bo'lganda xabar berish</button>
+      <button type="button" class="big-watch-btn auto" onclick="subscribe(${sk}, true)">🤖 Paydo bo'lganda sotib olish</button>
+    </div>`;
+}
+
+function mountRouteWatchSection(routeSubKey, isWatching) {
+  return `<div class="route-watch-section">${buildRouteWatchSection(routeSubKey, isWatching)}</div>`;
+}
+
+function subscribeTrainWatch(trainNumber, autoBuy) {
+  subscribe(subKeyOf(state.fromCode, state.toCode, state.date, trainNumber), autoBuy, trainNumber);
+}
+
+function unsubscribeTrain(trainNumber) {
+  unsubscribe(subKeyOf(state.fromCode, state.toCode, state.date, trainNumber));
 }
 
 // ───────────────────────────── SUBSCRIBE / UNSUBSCRIBE ───────────────────────
-async function subscribe(subKey, autoBuy = false) {
+async function subscribe(subKey, autoBuy = false, trainNumber = null) {
   if (!TG_USER_ID) {
     showToast("Botni Telegram orqali oching!");
     return;
   }
+  const tn = trainNumber != null && String(trainNumber).trim() !== "" ? String(trainNumber).trim() : null;
   showLoading(true, "Qo'shilmoqda...");
   try {
     const res = await apiFetch("/api/subscribe", {
@@ -510,6 +563,7 @@ async function subscribe(subKey, autoBuy = false) {
         time_to:    state.timeTo   || null,
         auto_buy:   autoBuy,
         comfort_class: state.comfortClass || "all",
+        train_number: tn,
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
@@ -519,11 +573,11 @@ async function subscribe(subKey, autoBuy = false) {
         showToast(warns[0]);
       } else {
         showToast(autoBuy
-          ? "🤖 Kuzatuv yoqildi. Bilet chiqishi bilan jarayon boshlanadi (bir necha soniya ichida tekshiriladi)."
-          : "✅ Kuzatuv yoqildi!"
+          ? "🤖 Shu reysda joy chiqishi bilan avtomatik sotib olishga harakat qilinadi."
+          : "🔔 Shu reys / yo'nalish bo'yicha joy chiqsa xabar beramiz."
         );
       }
-      refreshResultButtons(subKey, true);
+      refreshWatchUI(subKey);
       updateBellBadge();
     }
   } catch {
@@ -541,7 +595,7 @@ async function unsubscribe(subKey) {
     await apiFetch(`/api/subscriptions/${subId}`, { method: "DELETE" });
     delete state.activeSubs[subKey];
     showToast("🔕 Kuzatuv bekor qilindi.");
-    refreshResultButtons(subKey, false);
+    refreshWatchUI(subKey);
     updateBellBadge();
   } catch {
     showToast("Xatolik. Qayta urinib ko'ring.");
@@ -550,16 +604,19 @@ async function unsubscribe(subKey) {
   }
 }
 
-function refreshResultButtons(subKey, isWatching) {
-  document.querySelectorAll(".watch-btn").forEach(btn => {
-    btn.className = isWatching ? "watch-btn watching" : "watch-btn auto-buy-btn";
-    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🤖 Avtomatik sotib olish";
-    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey, true);
-  });
-  document.querySelectorAll(".big-watch-btn").forEach(btn => {
-    btn.className = isWatching ? "big-watch-btn watching" : "big-watch-btn";
-    btn.textContent = isWatching ? "✅ Kuzatilmoqda — bekor qilish" : "🤖 Avtomatik sotib olish";
-    btn.onclick = isWatching ? () => unsubscribe(subKey) : () => subscribe(subKey, true);
+function refreshWatchUI(changedSubKey) {
+  const routeKey = subKeyOf(state.fromCode, state.toCode, state.date);
+  const isRoute = !!state.activeSubs[routeKey];
+  const sec = document.querySelector(".route-watch-section");
+  if (sec) sec.outerHTML = mountRouteWatchSection(routeKey, isRoute);
+  document.querySelectorAll(".train-card-soldout").forEach(card => {
+    const enc = card.getAttribute("data-train-num") || "";
+    const num = decodeURIComponent(enc);
+    const sk = subKeyOf(state.fromCode, state.toCode, state.date, num);
+    const box = card.querySelector(".train-soldout-actions");
+    if (box) {
+      box.innerHTML = soldOutTrainActionsHtml(JSON.stringify(num), !!state.activeSubs[sk]);
+    }
   });
 }
 
@@ -596,7 +653,7 @@ function renderSubscriptions(subs) {
 
   // Refresh local cache
   subs.forEach(s => {
-    state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date)] = s.id;
+    state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date, s.train_number)] = s.id;
   });
 
   container.innerHTML = `
@@ -609,7 +666,7 @@ function renderSubscriptions(subs) {
           <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${s.comfort_class && s.comfort_class !== "all" ? `&nbsp;🪑 ${comfortLabel(s.comfort_class)}` : ""}</div>
           <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Kuzatilmoqda"} (har 10 daqiqa)</span>
         </div>
-        <button class="sub-delete" onclick="deleteSubFromList(${s.id},'${subKeyOf(s.from_code, s.to_code, s.date)}')" title="O'chirish">
+        <button class="sub-delete" onclick='deleteSubFromList(${s.id},${JSON.stringify(subKeyOf(s.from_code, s.to_code, s.date, s.train_number))})' title="O'chirish">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
             <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -697,7 +754,7 @@ async function loadActiveSubs() {
   try {
     const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
     (res.subscriptions || []).forEach(s => {
-      state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date)] = s.id;
+      state.activeSubs[subKeyOf(s.from_code, s.to_code, s.date, s.train_number)] = s.id;
     });
     updateBellBadge();
   } catch { /* silent */ }
@@ -719,8 +776,11 @@ async function apiFetch(path, options = {}) {
   return resp.json();
 }
 
-function subKeyOf(fromCode, toCode, date) {
-  return `${fromCode}|${toCode}|${date}`;
+function subKeyOf(fromCode, toCode, date, trainNumber) {
+  const t = trainNumber != null && String(trainNumber).trim() !== ""
+    ? String(trainNumber).trim()
+    : "";
+  return `${fromCode}|${toCode}|${date}|${t}`;
 }
 
 function fmtDate(d) {
