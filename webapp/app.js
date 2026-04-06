@@ -365,14 +365,16 @@ function renderResults(data) {
   const routeSubKey = subKeyOf(state.fromCode, state.toCode, state.date);
   const isRouteWatching = !!state.activeSubs[routeSubKey];
 
-  // Vaqt filtri
+  // Vaqt filtri (daqiqalar — "9:30" satr taqqosi xatolari yo'q); vaqt API UTC bo'lsa Toshkentga aylantiriladi
   const inTimeRange = (train) => {
     if (!state.timeFrom && !state.timeTo) return true;
     const dep = parseTime(train.departureDate || train.departureTime);
-    if (!dep) return true;
-    const from = state.timeFrom || "00:00";
-    const to   = state.timeTo   || "23:59";
-    return dep >= from && dep <= to;
+    const depM = timeHMToMinutes(dep);
+    if (depM === null) return true;
+    const fromM = state.timeFrom ? timeHMToMinutes(state.timeFrom) : 0;
+    const toM = state.timeTo ? timeHMToMinutes(state.timeTo) : (23 * 60 + 59);
+    if (fromM === null || toM === null) return true;
+    return depM >= fromM && depM <= toM;
   };
 
   const timeFilteredTrains = trains.filter(inTimeRange);
@@ -446,16 +448,55 @@ function renderResults(data) {
   showScreen("screenResults");
 }
 
+/** Temiryo'l jadvali O'zbekiston vaqti bilan mos (API UTC (Z) bersa ham) */
+const TZ_TASHKENT = "Asia/Tashkent";
+
 function parseTime(val) {
   if (!val) return "";
   const s = String(val).trim();
-  // "2026-04-07T07:30:00"
-  if (s.includes("T")) return s.split("T")[1].slice(0, 5);
-  // "07.04.2026 07:30:00"  or  "07.04.2026 07:30"
-  if (s.includes(" ")) return s.split(" ")[1].slice(0, 5);
-  // Already "07:30" or "07:30:00"
-  if (s.includes(":")) return s.slice(0, 5);
-  return s;
+  if (s.includes("T")) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      try {
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: TZ_TASHKENT,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(d);
+        const hour = parts.find(p => p.type === "hour")?.value;
+        const minute = parts.find(p => p.type === "minute")?.value;
+        if (hour != null && minute != null)
+          return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      } catch {
+        /* fallthrough */
+      }
+    }
+    const m = /T(\d{1,2}):(\d{2})/.exec(s);
+    if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
+    return "";
+  }
+  if (s.includes(" ")) {
+    const rest = s.split(/\s+/).slice(1).join(" ");
+    const m = /(\d{1,2}):(\d{2})/.exec(rest);
+    if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
+    return "";
+  }
+  if (s.includes(":")) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(s);
+    if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
+  }
+  return "";
+}
+
+/** "HH:MM" → kun boshidan daqiqalar (filtr uchun) */
+function timeHMToMinutes(hm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hm).trim());
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
 }
 
 function getBrandClass(brand) {

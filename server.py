@@ -9,9 +9,11 @@ Telegram Mini App backend
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,6 +38,9 @@ CHECK_INTERVAL_MINUTES = 10
 RAILWAY_BASE = "https://eticket.railway.uz"
 RAILWAY_API  = f"{RAILWAY_BASE}/api/v3/handbook/trains/list"
 RAILWAY_UA   = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+# API vaqtlari ba'zan UTC (Z); filtrlash va xabarlar O'zbekiston vaqti bilan mos bo'lishi kerak
+_TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 
 
 # ── DATABASE ──────────────────────────────────────────────────────────────────
@@ -181,19 +186,64 @@ def car_matches_comfort(car_type_name: str | None, comfort: str | None) -> bool:
 
 
 def _parse_time(val) -> str:
-    """Extract HH:MM from various formats:
-       '2026-04-07T07:30:00', '07.04.2026 07:30:00', '07:30'
-    """
+    """Jo'nash/kelish vaqtini Asia/Tashkent bo'yicha HH:MM qaytaradi (UTC Z bo'lsa aylantiradi)."""
     if not val:
         return ""
     s = str(val).strip()
     if "T" in s:
-        return s.split("T")[1][:5]
+        try:
+            iso = s.replace("Z", "+00:00") if s.endswith("Z") else s
+            dt = datetime.fromisoformat(iso)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_TASHKENT_TZ)
+            else:
+                dt = dt.astimezone(_TASHKENT_TZ)
+            return dt.strftime("%H:%M")
+        except Exception:
+            m = re.search(r"T(\d{1,2}):(\d{2})", s)
+            if m:
+                return f"{int(m.group(1)):02d}:{m.group(2)}"
+            return ""
     if " " in s:
-        return s.split(" ")[1][:5]
+        tail = s.split(" ", 1)[1].strip()
+        if ":" in tail:
+            a, b, *_ = tail.split(":")
+            return f"{int(a):02d}:{b[:2]}"
     if ":" in s:
-        return s[:5]
-    return s
+        a, b, *_ = s.split(":")
+        return f"{int(a):02d}:{b[:2]}"
+    return ""
+
+
+def _hm_to_minutes(hm: str) -> int | None:
+    if not hm:
+        return None
+    parts = str(hm).strip().split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        h, m = int(parts[0]), int(parts[1][:2])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h * 60 + m
+    except ValueError:
+        pass
+    return None
+
+
+def _dep_within_window(dep: str, time_from: str | None, time_to: str | None) -> bool:
+    """Satr taqqosi o'rniga daqiqalar — '9:30' va '17:56' noto'g'ri chiqmasin."""
+    d = _hm_to_minutes(dep)
+    if d is None:
+        return True
+    if time_from:
+        tf = _hm_to_minutes(time_from)
+        if tf is not None and d < tf:
+            return False
+    if time_to:
+        tt = _hm_to_minutes(time_to)
+        if tt is not None and d > tt:
+            return False
+    return True
 
 
 def extract_available(
@@ -218,10 +268,7 @@ def extract_available(
 
         dep = _parse_time(train.get("departureDate") or train.get("departureTime"))
 
-        # Vaqt filtri
-        if time_from and dep and dep < time_from:
-            continue
-        if time_to and dep and dep > time_to:
+        if not _dep_within_window(dep, time_from, time_to):
             continue
 
         seats = []
