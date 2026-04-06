@@ -118,6 +118,19 @@
         </svg>
       </div>
 
+      <div class="field" id="fieldTrainBrand" onclick="openTrainBrandPicker()">
+        <div class="field-icon comfort-icon">
+          <span class="comfort-icon-emoji">🚄</span>
+        </div>
+        <div class="field-content">
+          <span class="field-label">Poyezd turi</span>
+          <span class="field-value selected" id="trainBrandValue">Barcha poyezdlar</span>
+        </div>
+        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+
       <div class="field" id="fieldComfort" onclick="openComfortPicker()">
         <div class="field-icon comfort-icon">
           <span class="comfort-icon-emoji">🪑</span>
@@ -178,6 +191,14 @@
       <button class="time-confirm-btn" id="timeConfirmBtn" onclick="confirmTime()">
         Tasdiqlash
       </button>
+    </div>
+  </div>
+
+  <!-- ===== TRAIN BRAND PICKER ===== -->
+  <div class="screen" id="screenTrainBrand">
+    <div class="comfort-picker-wrap">
+      <p class="comfort-picker-hint">Qaysi turdagi poyezdlar ko'rsatilsin (Afrosiyob, Sharq, ...)</p>
+      <div class="comfort-options" id="trainBrandOptions"></div>
     </div>
   </div>
 

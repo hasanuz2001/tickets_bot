@@ -110,18 +110,22 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
     await marker.scroll_into_view_if_needed()
     await page.wait_for_timeout(400)
 
+    # UZ sahifada ko'pincha "Poyezdni tanlash"; RU "Купить" va hokazo
     buy_xpath = (
         "xpath=ancestor::*[.//button["
-        "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid')"
+        "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid') or "
+        "contains(., 'Poyezdni tanlash') or contains(., 'poyezdni tanlash')"
         "]][1]//button["
-        "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid')"
+        "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid') or "
+        "contains(., 'Poyezdni tanlash') or contains(., 'poyezdni tanlash')"
         "][1]"
     )
     buy_btn = marker.locator(buy_xpath).first
     if not await buy_btn.count():
         buy_btn = marker.locator(
             "xpath=following::button["
-            "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid')"
+            "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid') or "
+            "contains(., 'Poyezdni tanlash') or contains(., 'poyezdni tanlash')"
             "][1]"
         ).first
     if not await buy_btn.count():
@@ -175,51 +179,40 @@ async def _fill_passenger(page, passenger: dict) -> None:
     passport = (passenger.get("passport") or "").strip()
     phone = (passenger.get("phone") or "").strip()
 
-    if name:
-        for sel in (
-            "input[type='email']",
-            "input[placeholder*='Имя']",
-            "input[placeholder*='ФИО']",
-            "input[placeholder*='Ism']",
-            "input[name*='name']",
-        ):
-            el = page.locator(sel).first
-            if await el.count():
-                try:
-                    await el.fill(name, timeout=5000)
-                    break
-                except Exception:
-                    pass
+    for loc in (
+        page.locator("input[placeholder*='Имя' i], input[placeholder*='ФИО' i], input[name*='name' i]"),
+        page.locator("input[type='text']").filter(has_not=page.locator("[type='password']")),
+    ):
+        if await loc.count() and name:
+            try:
+                await loc.first.fill(name, timeout=5000)
+                break
+            except Exception:
+                pass
 
-    if passport:
-        for sel in (
-            "input[placeholder*='Серия']",
-            "input[placeholder*='Паспорт']",
-            "input[placeholder*='Passport']",
-            "input[name*='passport']",
-        ):
-            el = page.locator(sel).first
-            if await el.count():
-                try:
-                    await el.fill(passport, timeout=5000)
-                    break
-                except Exception:
-                    pass
+    for sel in (
+        "input[placeholder*='Серия' i], input[placeholder*='Паспорт' i], input[name*='passport' i]",
+        "input[placeholder*='passport' i]",
+    ):
+        el = page.locator(sel).first
+        if await el.count() and passport:
+            try:
+                await el.fill(passport, timeout=5000)
+                break
+            except Exception:
+                pass
 
-    if phone:
-        for sel in (
-            "input[type='tel']",
-            "input[placeholder*='Телефон']",
-            "input[placeholder*='Telefon']",
-            "input[placeholder*='phone']",
-        ):
-            el = page.locator(sel).first
-            if await el.count():
-                try:
-                    await el.fill(phone, timeout=5000)
-                    break
-                except Exception:
-                    pass
+    for sel in (
+        "input[type='tel']",
+        "input[placeholder*='Телефон' i], input[placeholder*='phone' i]",
+    ):
+        el = page.locator(sel).first
+        if await el.count() and phone:
+            try:
+                await el.fill(phone, timeout=5000)
+                break
+            except Exception:
+                pass
 
 
 async def _click_continue_to_payment(page) -> bool:
@@ -227,6 +220,7 @@ async def _click_continue_to_payment(page) -> bool:
         "Продолжить",
         "Далее",
         "Davom",
+        "Davom etish",
         "К оплате",
         "To'lov",
         "Тўлов",
@@ -243,7 +237,8 @@ async def _click_continue_to_payment(page) -> bool:
                 continue
     legacy = page.locator(
         "button:has-text('Продолжить'), button:has-text('Далее'), "
-        "button:has-text('К оплате'), button:has-text('Davom')"
+        "button:has-text('К оплате'), button:has-text('Davom'), "
+        "button:has-text('Davom etish')"
     ).first
     if await legacy.count():
         try:

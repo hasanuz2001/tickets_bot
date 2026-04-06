@@ -7,6 +7,7 @@ Telegram Mini App backend
 """
 
 import asyncio
+import html
 import logging
 import os
 import re
@@ -104,6 +105,7 @@ def init_db():
             "auto_buy INTEGER DEFAULT 0",
             "comfort_class TEXT DEFAULT 'all'",
             "train_number TEXT",
+            "train_brand TEXT",
         ]:
             try:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col}")
@@ -164,6 +166,37 @@ def subscription_comfort_class(sub: sqlite3.Row) -> str:
         return "all"
     s = str(c).strip().lower()
     return s if s in ("all", "economy", "business", "vip") else "all"
+
+
+def subscription_train_brand(sub: sqlite3.Row) -> str:
+    """Kuzatuv: poyezd turi filtri — all | afrosiyob | sharq | talgo | express."""
+    try:
+        b = sub["train_brand"]
+    except (KeyError, IndexError):
+        return "all"
+    if b is None or str(b).strip() == "":
+        return "all"
+    s = str(b).strip().lower()
+    return s if s in ("all", "afrosiyob", "sharq", "talgo", "express") else "all"
+
+
+def train_matches_brand(train: dict, brand: str | None) -> bool:
+    """API train obyekti brand/type bo'yicha filtr."""
+    if not brand or brand == "all":
+        return True
+    blob = f"{train.get('brand') or ''} {train.get('type') or ''}".lower()
+    if brand == "afrosiyob":
+        return "afrosiyob" in blob or "афроси" in blob
+    if brand == "sharq":
+        return "sharq" in blob or "шарқ" in blob or "шарк" in blob
+    if brand == "talgo":
+        return "talgo" in blob or "тальго" in blob
+    if brand == "express":
+        return any(
+            x in blob
+            for x in ("скор", "скорый", "tez", "пассажир", "yo'lovchi", "yoʻlovchi", "yolovchi")
+        )
+    return True
 
 
 def car_matches_comfort(car_type_name: str | None, comfort: str | None) -> bool:
@@ -252,8 +285,9 @@ def extract_available(
     time_to: str = None,
     comfort_class: str = "all",
     train_number: str | None = None,
+    train_brand: str | None = None,
 ) -> list[dict]:
-    """Return trains with free seats; vaqt, joy turi va ixtiyoriy poyezd raqami bo'yicha filtr."""
+    """Return trains with free seats; vaqt, joy, poyezd turi va ixtiyoriy poyezd raqami bo'yicha filtr."""
     available = []
     try:
         trains = data["data"]["directions"]["forward"]["trains"]
@@ -261,9 +295,12 @@ def extract_available(
         return available
 
     tn_filter = str(train_number).strip() if train_number else None
+    tb = (train_brand or "all").strip().lower() if train_brand else "all"
 
     for train in trains:
         if tn_filter and str(train.get("number", "")).strip() != tn_filter:
+            continue
+        if not train_matches_brand(train, tb):
             continue
 
         dep = _parse_time(train.get("departureDate") or train.get("departureTime"))
@@ -324,6 +361,17 @@ def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
         labels = {"economy": "Ekonom", "business": "Business", "vip": "VIP"}
         comfort_filter = f"  🪑 {labels.get(cc, cc)}"
 
+    tb = subscription_train_brand(sub)
+    brand_filter = ""
+    if tb != "all":
+        bl = {
+            "afrosiyob": "Afrosiyob",
+            "sharq": "Sharq",
+            "talgo": "Talgo",
+            "express": "Tezkor",
+        }
+        brand_filter = f"  🚄 {bl.get(tb, tb)}"
+
     stn = subscription_train_number(sub)
     lines = [
         "🎫 <b>Bilet mavjud!</b>",
@@ -333,7 +381,7 @@ def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
     if stn:
         lines.append(f"🚂 <b>Poyezd №{stn}</b>")
     lines += [
-        f"📅 {sub['date']}{time_filter}{comfort_filter}",
+        f"📅 {sub['date']}{time_filter}{comfort_filter}{brand_filter}",
         "",
     ]
     for t in trains[:3]:
@@ -358,6 +406,7 @@ async def process_subscription(sub: sqlite3.Row) -> None:
             sub["time_to"],
             subscription_comfort_class(sub),
             subscription_train_number(sub),
+            subscription_train_brand(sub),
         )
 
         if trains:
@@ -540,6 +589,17 @@ class SubscribeRequest(BaseModel):
     auto_buy:  bool = False
     comfort_class: str = "all"  # all | economy | business | vip
     train_number: str | None = None  # NULL = butun yo'nalish; raqam = faqat shu reys
+    train_brand: str | None = None  # all | afrosiyob | sharq | talgo | express
+
+    @field_validator("train_brand", mode="before")
+    @classmethod
+    def _tbrand(cls, v):
+        if v is None or str(v).strip() == "":
+            return None
+        s = str(v).strip().lower()
+        if s == "all":
+            return None
+        return s if s in ("afrosiyob", "sharq", "talgo", "express") else None
 
     @field_validator("comfort_class", mode="before")
     @classmethod
@@ -585,23 +645,25 @@ async def subscribe(req: SubscribeRequest):
         raise HTTPException(status_code=400, detail="O'tgan sanaga obuna bo'lib bo'lmaydi")
 
     tn = req.train_number
+    tbrand = req.train_brand if req.train_brand and req.train_brand != "all" else None
 
     with get_db() as conn:
-        # Bir xil yo'nalish + sana + (poyezd yoki butun yo'nalish) — takrorlanmasin
+        # Bir xil yo'nalish + sana + poyezd + poyezd turi — takrorlanmasin
         existing = conn.execute(
             """SELECT id FROM subscriptions
                WHERE user_id=? AND from_code=? AND to_code=? AND date=? AND is_active=1
-               AND IFNULL(train_number, '') = IFNULL(?, '')""",
-            (req.user_id, req.from_code, req.to_code, req.date, tn),
+               AND IFNULL(train_number, '') = IFNULL(?, '')
+               AND IFNULL(train_brand, '') = IFNULL(?, '')""",
+            (req.user_id, req.from_code, req.to_code, req.date, tn, tbrand),
         ).fetchone()
 
         if existing:
             conn.execute(
                 """UPDATE subscriptions
-                   SET auto_buy=?, time_from=?, time_to=?, comfort_class=?, train_number=?
+                   SET auto_buy=?, time_from=?, time_to=?, comfort_class=?, train_number=?, train_brand=?
                    WHERE id=? AND is_active=1""",
                 (1 if req.auto_buy else 0, req.time_from, req.time_to,
-                 req.comfort_class, tn, existing["id"]),
+                 req.comfort_class, tn, tbrand, existing["id"]),
             )
             conn.commit()
             sub_id = existing["id"]
@@ -614,11 +676,11 @@ async def subscribe(req: SubscribeRequest):
 
         cur = conn.execute(
             """INSERT INTO subscriptions
-               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class, train_number)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class, train_number, train_brand)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
              req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0,
-             req.comfort_class, tn),
+             req.comfort_class, tn, tbrand),
         )
         conn.commit()
         sub_id = cur.lastrowid
@@ -734,52 +796,142 @@ async def purchase_ticket(req: PurchaseRequest):
     return {"status": "started", "purchase_id": purchase_id}
 
 
-async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseRequest):
-    """Playwright orqali chipta xarid qilish."""
-    from automation import buy_ticket
-    logger.info(f"Processing purchase #{purchase_id} for user {req.user_id}")
+async def _notify_purchase_telegram(req: PurchaseRequest, result: dict) -> None:
+    """Natijani foydalanuvchiga yuboradi; HTML xatolar va katta caption uchun fallback."""
+    chat_id = str(req.user_id).strip()
+    if not chat_id:
+        return
 
-    result = await buy_ticket(
-        from_code    = req.from_code,
-        to_code      = req.to_code,
-        from_name    = req.from_name,
-        to_name      = req.to_name,
-        date         = req.date,
-        train_number = req.train_number,
-        car_type     = req.car_type,
-        passenger    = passenger,
-    )
+    def e(s) -> str:
+        return html.escape(str(s) if s is not None else "", quote=False)
 
-    # Natijani saqlash
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE purchase_requests SET status=?, result_msg=? WHERE id=?",
-            (result["status"], result["message"], purchase_id),
-        )
-        conn.commit()
-
-    # Telegram xabar yuborish
-    tg = f"https://api.telegram.org/bot{BOT_TOKEN}"
-    status_emoji = "✅" if result["status"] in ("success", "partial") else "❌"
-    text = (
+    status_emoji = "✅" if result.get("status") in ("success", "partial") else "❌"
+    msg = e(result.get("message") or "")
+    text_html = (
         f"{status_emoji} <b>Chipta xaridi</b>\n\n"
-        f"🚆 {req.from_name} → {req.to_name}\n"
-        f"📅 {req.date}\n"
-        f"🕐 {req.dep_time} → {req.arr_time} | {req.train_brand} №{req.train_number}\n\n"
-        f"{result['message']}"
+        f"🚆 {e(req.from_name)} → {e(req.to_name)}\n"
+        f"📅 {e(req.date)}\n"
+        f"🕐 {e(req.dep_time)} → {e(req.arr_time)} | {e(req.train_brand)} №{e(req.train_number)}\n\n"
+        f"{msg}"
     )
+    text_plain = (
+        f"{status_emoji} Chipta xaridi\n\n"
+        f"{req.from_name} → {req.to_name}\n"
+        f"{req.date}\n"
+        f"{req.dep_time} → {req.arr_time} | {req.train_brand} №{req.train_number}\n\n"
+        f"{result.get('message') or ''}"
+    )[:4090]
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        if result.get("screenshot"):
-            await client.post(
-                f"{tg}/sendPhoto",
-                data={"chat_id": req.user_id, "caption": text, "parse_mode": "HTML"},
-                files={"photo": ("ticket.png", result["screenshot"], "image/png")},
+    tg = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    scr = result.get("screenshot")
+    cap = text_html[:1020] if len(text_html) > 1020 else text_html
+
+    async with httpx.AsyncClient(timeout=90) as client:
+        if scr and isinstance(scr, (bytes, bytearray)) and len(scr) > 50:
+            try:
+                r = await client.post(
+                    f"{tg}/sendPhoto",
+                    data={"chat_id": chat_id, "caption": cap, "parse_mode": "HTML"},
+                    files={"photo": ("ticket.png", scr, "image/png")},
+                )
+                if r.status_code == 200:
+                    logger.info("purchase Telegram: sendPhoto ok user=%s", chat_id)
+                    return
+                logger.warning(
+                    "purchase sendPhoto failed %s: %s",
+                    r.status_code,
+                    (r.text or "")[:800],
+                )
+            except Exception:
+                logger.exception("purchase sendPhoto exception user=%s", chat_id)
+
+        try:
+            r = await client.post(
+                f"{tg}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text_html[:4090],
+                    "parse_mode": "HTML",
+                },
             )
-        else:
-            await client.post(f"{tg}/sendMessage", json={
-                "chat_id": req.user_id, "text": text, "parse_mode": "HTML",
-            })
+            if r.status_code == 200:
+                logger.info("purchase Telegram: sendMessage HTML ok user=%s", chat_id)
+                return
+            logger.warning(
+                "purchase sendMessage HTML failed %s: %s",
+                r.status_code,
+                (r.text or "")[:800],
+            )
+        except Exception:
+            logger.exception("purchase sendMessage HTML user=%s", chat_id)
+
+        try:
+            r2 = await client.post(
+                f"{tg}/sendMessage",
+                json={"chat_id": chat_id, "text": text_plain},
+            )
+            if r2.status_code != 200:
+                logger.error(
+                    "purchase sendMessage plain failed %s: %s",
+                    r2.status_code,
+                    (r2.text or "")[:800],
+                )
+        except Exception:
+            logger.exception("purchase sendMessage plain user=%s", chat_id)
+
+
+async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseRequest):
+    """Playwright orqali chipta xarid qilish; xato yoki Telegram muammosi ham log + DB."""
+    result: dict = {"status": "error", "message": "Jarayon boshlanmadi.", "screenshot": None}
+    try:
+        from automation import buy_ticket
+
+        logger.info("Processing purchase #%s for user %s", purchase_id, req.user_id)
+        result = await buy_ticket(
+            from_code    = req.from_code,
+            to_code      = req.to_code,
+            from_name    = req.from_name,
+            to_name      = req.to_name,
+            date         = req.date,
+            train_number = req.train_number,
+            car_type     = req.car_type,
+            passenger    = passenger,
+        )
+    except Exception as ex:
+        logger.exception("purchase #%s buy_ticket crashed", purchase_id)
+        result = {
+            "status": "error",
+            "message": f"Server: {type(ex).__name__}: {ex}",
+            "screenshot": None,
+        }
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE purchase_requests SET status=?, result_msg=? WHERE id=?",
+                (result.get("status", "error"), result.get("message"), purchase_id),
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("purchase #%s DB update failed", purchase_id)
+
+    try:
+        await _notify_purchase_telegram(req, result)
+    except Exception:
+        logger.exception("purchase #%s Telegram notify failed", purchase_id)
+
+
+@app.get("/api/purchase/{purchase_id}/status")
+async def purchase_status(purchase_id: int, user_id: str):
+    """Mini App: xarid natijasini kuzatish (faqat o'z buyurtmasi)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT user_id, status, result_msg FROM purchase_requests WHERE id=?",
+            (purchase_id,),
+        ).fetchone()
+    if not row or str(row["user_id"]) != str(user_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"status": row["status"], "result_msg": row["result_msg"]}
 
 
 # ── Manually trigger a check (for testing) ───────────────────────────────────
