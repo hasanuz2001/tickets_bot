@@ -14,6 +14,12 @@ apt update && apt upgrade -y
 # --- 2. Kerakli paketlar ---
 apt install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git curl
 
+# Playwright Chromium uchun (avtomatik chipta); to'liq ro'yxat: install-playwright-deps.sh
+apt install -y \
+  libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libatspi2.0-0 \
+  libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 \
+  libpango-1.0-0 libcairo2 libasound2 libdrm2 libxkbcommon0 || true
+
 # --- 3. Papka yaratish ---
 mkdir -p /opt/tickets_bot
 cd /opt/tickets_bot

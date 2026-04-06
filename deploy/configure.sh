@@ -18,9 +18,18 @@ pip install --upgrade pip -q
 pip install -r requirements.txt -q
 
 echo ""
-echo "Playwright Chromium (bitta login orqali avtomatik chipta)..."
+echo "Playwright Chromium (avtomatik chipta)..."
 "$APP_DIR/venv/bin/playwright" install chromium || true
-"$APP_DIR/venv/bin/playwright" install-deps chromium 2>/dev/null || true
+if "$APP_DIR/venv/bin/playwright" install-deps chromium 2>/dev/null; then
+  echo "✅ Playwright tizim kutubxonalari (install-deps) tayyor"
+else
+  echo ""
+  echo "⚠️  Chromium uchun tizim paketlari o'rnatilmadi (odatda root kerak)."
+  echo "   SSH da bering:"
+  echo "     sudo bash $APP_DIR/deploy/install-playwright-deps.sh"
+  echo "   yoki:"
+  echo "     sudo $APP_DIR/venv/bin/playwright install-deps chromium"
+fi
 
 echo ""
 echo "✅ Python paketlari o'rnatildi"
