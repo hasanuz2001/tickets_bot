@@ -739,7 +739,7 @@ async def subscribe(req: SubscribeRequest):
         cur = conn.execute(
             """INSERT INTO subscriptions
                (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class, train_number, train_brand, dep_time, arr_time)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
              req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0,
              req.comfort_class, tn, tbrand, req.dep_time, req.arr_time),

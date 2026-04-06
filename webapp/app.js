@@ -967,8 +967,9 @@ async function subscribe(subKey, autoBuy = false, trainNumber = null, depTime = 
     } else {
       showToast("Javob keldi, holatni Kuzatishlar ekranidan tekshiring.");
     }
-  } catch {
-    showToast("Xatolik yuz berdi. Qayta urinib ko'ring.");
+  } catch (e) {
+    const m = (e && e.message) ? String(e.message).trim() : "";
+    showToast(m && m.length < 220 ? m : (m ? m.slice(0, 217) + "…" : "Xatolik yuz berdi. Qayta urinib ko'ring."));
   } finally {
     showLoading(false);
   }
@@ -1188,8 +1189,22 @@ async function apiFetch(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
+  const text = await resp.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!resp.ok) {
+    const d = data && data.detail;
+    let msg = "";
+    if (typeof d === "string") msg = d;
+    else if (Array.isArray(d)) msg = d.map(e => (e && e.msg) || String(e)).join(" ");
+    else if (d != null) msg = String(d);
+    throw new Error(msg || `HTTP ${resp.status}`);
+  }
+  return data;
 }
 
 function subKeyOf(fromCode, toCode, date, trainNumber, trainBrandCsv, comfortCsv) {
