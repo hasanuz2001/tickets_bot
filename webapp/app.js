@@ -994,7 +994,7 @@ function refreshWatchUI(changedSubKey) {
     const sk = subKeyOf(state.fromCode, state.toCode, state.date, num, state.trainBrandCsv, state.comfortCsv);
     const box = card.querySelector(".train-soldout-actions");
     if (box) {
-      box.innerHTML = soldOutTrainActionsHtml(JSON.stringify(num), !!state.activeSubs[sk]);
+      box.innerHTML = soldOutTrainActionsHtml(num, !!state.activeSubs[sk]);
     }
   });
 }
