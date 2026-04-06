@@ -118,6 +118,19 @@
         </svg>
       </div>
 
+      <div class="field" id="fieldComfort" onclick="openComfortPicker()">
+        <div class="field-icon comfort-icon">
+          <span class="comfort-icon-emoji">🪑</span>
+        </div>
+        <div class="field-content">
+          <span class="field-label">Joy turi</span>
+          <span class="field-value selected" id="comfortValue">Barcha turlar</span>
+        </div>
+        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+
       <button class="search-btn" id="searchBtn" onclick="doSearch()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
@@ -165,6 +178,14 @@
       <button class="time-confirm-btn" id="timeConfirmBtn" onclick="confirmTime()">
         Tasdiqlash
       </button>
+    </div>
+  </div>
+
+  <!-- ===== COMFORT CLASS PICKER ===== -->
+  <div class="screen" id="screenComfort">
+    <div class="comfort-picker-wrap">
+      <p class="comfort-picker-hint">Qaysi turdagi bo'sh joylar ko'rsatilsin</p>
+      <div class="comfort-options" id="comfortOptions"></div>
     </div>
   </div>
 

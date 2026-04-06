@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 load_dotenv()
 
@@ -93,7 +93,12 @@ def init_db():
             )
         """)
         # Migrations for existing DBs
-        for col in ["time_from TEXT", "time_to TEXT", "auto_buy INTEGER DEFAULT 0"]:
+        for col in [
+            "time_from TEXT",
+            "time_to TEXT",
+            "auto_buy INTEGER DEFAULT 0",
+            "comfort_class TEXT DEFAULT 'all'",
+        ]:
             try:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col}")
             except Exception:
@@ -132,6 +137,37 @@ async def fetch_trains(from_code: str, to_code: str, date: str) -> dict:
         return resp.json()
 
 
+def subscription_comfort_class(sub: sqlite3.Row) -> str:
+    """SQLite qatoridan comfort_class (migratsiyasiz eski DB uchun 'all')."""
+    try:
+        c = sub["comfort_class"]
+    except (KeyError, IndexError):
+        return "all"
+    if c is None or str(c).strip() == "":
+        return "all"
+    s = str(c).strip().lower()
+    return s if s in ("all", "economy", "business", "vip") else "all"
+
+
+def car_matches_comfort(car_type_name: str | None, comfort: str | None) -> bool:
+    """
+    O'zbekiston temir yo'llari vagon turini foydalanuvchi 'ekonom / business / vip' bilan moslashtirish.
+    API odatda ruscha: Плацкарт, Купе, СВ, Люкс, Сидячий, Общий.
+    """
+    if not comfort or comfort == "all":
+        return True
+    n = (car_type_name or "").casefold().replace("ё", "е").strip()
+    if comfort == "economy":
+        return any(k in n for k in ("плацкарт", "сидяч", "общ", "эконом", "platz"))
+    if comfort == "business":
+        return any(k in n for k in ("купе", "бизнес", "business", "compartment"))
+    if comfort == "vip":
+        return any(k in n for k in ("люкс", "lux", "vip", "спальн")) or (
+            n.strip(" .№") == "св"
+        )
+    return True
+
+
 def _parse_time(val) -> str:
     """Extract HH:MM from various formats:
        '2026-04-07T07:30:00', '07.04.2026 07:30:00', '07:30'
@@ -148,8 +184,13 @@ def _parse_time(val) -> str:
     return s
 
 
-def extract_available(data: dict, time_from: str = None, time_to: str = None) -> list[dict]:
-    """Return trains with free seats, optionally filtered by departure time range."""
+def extract_available(
+    data: dict,
+    time_from: str = None,
+    time_to: str = None,
+    comfort_class: str = "all",
+) -> list[dict]:
+    """Return trains with free seats; vaqt va joy turi (economy/business/vip) bo'yicha filtr."""
     available = []
     try:
         trains = data["data"]["directions"]["forward"]["trains"]
@@ -168,16 +209,20 @@ def extract_available(data: dict, time_from: str = None, time_to: str = None) ->
         seats = []
         for car in train.get("cars", []):
             free = car.get("freeSeats", 0)
-            if free > 0:
-                price = next(
-                    (t.get("tariff") for t in car.get("tariffs", []) if t.get("tariff")),
-                    None,
-                )
-                seats.append({
-                    "type":  car.get("carTypeName", "Vagon"),
-                    "free":  free,
-                    "price": price,
-                })
+            if free <= 0:
+                continue
+            cname = car.get("carTypeName", "")
+            if not car_matches_comfort(cname, comfort_class):
+                continue
+            price = next(
+                (t.get("tariff") for t in car.get("tariffs", []) if t.get("tariff")),
+                None,
+            )
+            seats.append({
+                "type":  cname or "Vagon",
+                "free":  free,
+                "price": price,
+            })
         if seats:
             available.append({
                 "dep":    dep,
@@ -208,12 +253,17 @@ def build_notification(sub: sqlite3.Row, trains: list[dict]) -> str:
     time_filter = ""
     if sub["time_from"] or sub["time_to"]:
         time_filter = f"  ⏰ {sub['time_from'] or '00:00'} — {sub['time_to'] or '23:59'}"
+    cc = subscription_comfort_class(sub)
+    comfort_filter = ""
+    if cc != "all":
+        labels = {"economy": "Ekonom", "business": "Business", "vip": "VIP"}
+        comfort_filter = f"  🪑 {labels.get(cc, cc)}"
 
     lines = [
         "🎫 <b>Bilet mavjud!</b>",
         "",
         f"🚆 <b>{sub['from_name']} → {sub['to_name']}</b>",
-        f"📅 {sub['date']}{time_filter}",
+        f"📅 {sub['date']}{time_filter}{comfort_filter}",
         "",
     ]
     for t in trains[:3]:
@@ -243,12 +293,21 @@ async def check_subscriptions():
     for sub in rows:
         try:
             data     = await fetch_trains(sub["from_code"], sub["to_code"], sub["date"])
-            trains   = extract_available(data, sub["time_from"], sub["time_to"])
+            trains   = extract_available(
+                data,
+                sub["time_from"],
+                sub["time_to"],
+                subscription_comfort_class(sub),
+            )
 
             if trains:
                 train = trains[0]
+                wants_auto = int(sub["auto_buy"] or 0) == 1
+                has_rail_creds = bool(
+                    os.getenv("RAILWAY_LOGIN", "").strip() and os.getenv("RAILWAY_PASSWORD", "").strip()
+                )
 
-                if sub["auto_buy"] and os.getenv("RAILWAY_LOGIN") and os.getenv("RAILWAY_PASSWORD"):
+                if wants_auto and has_rail_creds:
                     # ── Avtomatik xarid ──────────────────────────────
                     logger.info(f"[auto_buy] Starting purchase for sub {sub['id']}")
 
@@ -263,6 +322,8 @@ async def check_subscriptions():
                         try:
                             from automation import buy_ticket
                             result = await buy_ticket(
+                                from_code    = sub["from_code"],
+                                to_code      = sub["to_code"],
                                 from_name    = sub["from_name"],
                                 to_name      = sub["to_name"],
                                 date         = sub["date"],
@@ -273,10 +334,11 @@ async def check_subscriptions():
                             # Natijani yuborish
                             tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
                             seats_txt = "\n".join(
-                                f"  🪑 {s['type']}: {s['free']} joy | {int(s['price']):,} so'm"
-                                for s in train["seats"][:2] if s.get("price")
+                                f"  🪑 {s['type']}: {s['free']} joy | "
+                                f"{int(float(s['price'])):,} so'm"
+                                for s in train["seats"][:2] if s.get("price") is not None
                             )
-                            emoji = "✅" if result["status"] == "success" else "⚠️"
+                            emoji = "✅" if result["status"] in ("success", "partial") else "⚠️"
                             text = (
                                 f"🤖 <b>Avtomatik xarid natijasi</b>\n\n"
                                 f"🚆 {sub['from_name']} → {sub['to_name']}\n"
@@ -304,9 +366,16 @@ async def check_subscriptions():
                         # Yo'lovchi ma'lumoti yo'q — oddiy notification
                         msg = (
                             build_notification(sub, trains) +
-                            "\n\n⚠️ Avtomatik xarid uchun /myinfo buyrug'ini yuboring!"
+                            "\n\n⚠️ Avtomatik xarid uchun Mini App → Profil yoki /myinfo"
                         )
                         await send_telegram_message(sub["user_id"], msg)
+                elif wants_auto and not has_rail_creds:
+                    msg = (
+                        build_notification(sub, trains)
+                        + "\n\n⚠️ Serverda <code>RAILWAY_LOGIN</code> / <code>RAILWAY_PASSWORD</code> "
+                          "yo'q — avtomatik sotib olish ishlamayapti."
+                    )
+                    await send_telegram_message(sub["user_id"], msg)
                 else:
                     # ── Oddiy notification ───────────────────────────
                     msg = build_notification(sub, trains)
@@ -379,6 +448,13 @@ class SubscribeRequest(BaseModel):
     time_from: str | None = None
     time_to:   str | None = None
     auto_buy:  bool = False
+    comfort_class: str = "all"  # all | economy | business | vip
+
+    @field_validator("comfort_class", mode="before")
+    @classmethod
+    def _comfort(cls, v):
+        s = (str(v) if v is not None else "all").strip().lower()
+        return s if s in ("all", "economy", "business", "vip") else "all"
 
 
 # ── ROUTES ────────────────────────────────────────────────────────────────────
@@ -391,6 +467,19 @@ async def search_trains(req: TrainSearchRequest):
         raise HTTPException(status_code=e.response.status_code, detail="Railway API xatosi")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _auto_buy_env_warnings(user_id: str) -> list[str]:
+    w = []
+    if not os.getenv("RAILWAY_LOGIN", "").strip() or not os.getenv("RAILWAY_PASSWORD", "").strip():
+        w.append("Serverda RAILWAY_LOGIN/PASSWORD yo'q — avtomatik xarid ishlamaydi.")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM passenger_info WHERE user_id=?", (user_id,)
+        ).fetchone()
+    if not row:
+        w.append("Profilda ism/passport/telefon yo'q — avtomatik xarid uchun Profilni to'ldiring.")
+    return w
 
 
 @app.post("/api/subscribe")
@@ -408,20 +497,40 @@ async def subscribe(req: SubscribeRequest):
         ).fetchone()
 
         if existing:
-            return {"status": "already_exists", "id": existing["id"]}
+            conn.execute(
+                """UPDATE subscriptions
+                   SET auto_buy=?, time_from=?, time_to=?, comfort_class=?
+                   WHERE id=? AND is_active=1""",
+                (1 if req.auto_buy else 0, req.time_from, req.time_to,
+                 req.comfort_class, existing["id"]),
+            )
+            conn.commit()
+            sub_id = existing["id"]
+            logger.info(f"Subscription #{sub_id} updated (auto_buy={req.auto_buy})")
+            asyncio.create_task(check_subscriptions())
+            out = {"status": "already_exists", "id": sub_id}
+            if req.auto_buy:
+                out["auto_buy_warnings"] = _auto_buy_env_warnings(req.user_id)
+            return out
 
         cur = conn.execute(
             """INSERT INTO subscriptions
-               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               (user_id, from_code, to_code, from_name, to_name, date, time_from, time_to, auto_buy, comfort_class)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (req.user_id, req.from_code, req.to_code, req.from_name, req.to_name,
-             req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0),
+             req.date, req.time_from, req.time_to, 1 if req.auto_buy else 0,
+             req.comfort_class),
         )
         conn.commit()
         sub_id = cur.lastrowid
 
     logger.info(f"New subscription #{sub_id}: {req.from_name}→{req.to_name} {req.date} (user {req.user_id})")
-    return {"status": "ok", "id": sub_id}
+    # Darhol tekshirish — aks holda foydalanuvchi 10 min kutadi
+    asyncio.create_task(check_subscriptions())
+    out = {"status": "ok", "id": sub_id}
+    if req.auto_buy:
+        out["auto_buy_warnings"] = _auto_buy_env_warnings(req.user_id)
+    return out
 
 
 @app.get("/api/subscriptions/{user_id}")
@@ -487,6 +596,8 @@ async def get_passenger(user_id: str):
 # ── PURCHASE ──────────────────────────────────────────────────────────────────
 class PurchaseRequest(BaseModel):
     user_id:      str
+    from_code:    str
+    to_code:      str
     from_name:    str
     to_name:      str
     date:         str
@@ -530,6 +641,8 @@ async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseReque
     logger.info(f"Processing purchase #{purchase_id} for user {req.user_id}")
 
     result = await buy_ticket(
+        from_code    = req.from_code,
+        to_code      = req.to_code,
         from_name    = req.from_name,
         to_name      = req.to_name,
         date         = req.date,
@@ -548,7 +661,7 @@ async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseReque
 
     # Telegram xabar yuborish
     tg = f"https://api.telegram.org/bot{BOT_TOKEN}"
-    status_emoji = "✅" if result["status"] == "success" else "❌"
+    status_emoji = "✅" if result["status"] in ("success", "partial") else "❌"
     text = (
         f"{status_emoji} <b>Chipta xaridi</b>\n\n"
         f"🚆 {req.from_name} → {req.to_name}\n"

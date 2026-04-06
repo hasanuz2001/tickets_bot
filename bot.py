@@ -13,19 +13,46 @@ from dotenv import load_dotenv
 import json
 
 import httpx as _httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp
+from urllib.parse import urlparse
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    MenuButtonWebApp,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    WebAppInfo,
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 )
 
-SERVER_URL = os.getenv("WEBAPP_URL", "http://localhost:8000")
-
 load_dotenv()
 
+
+def _normalize_webapp_url(raw: str) -> str:
+    u = (raw or "").strip().rstrip("/")
+    if not u:
+        return "http://localhost:8000"
+    if "localhost" in u or "127.0.0.1" in u:
+        return u
+    if u.startswith("http://"):
+        u = "https://" + u[len("http://") :]
+    return u
+
+
 # --- SOZLAMALAR ---
-BOT_TOKEN  = os.getenv("BOT_TOKEN", "")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://YOUR_DOMAIN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+WEBAPP_URL = _normalize_webapp_url(os.getenv("WEBAPP_URL", ""))
+# Bot ichidan server API ga (xarid va h.k.)
+SERVER_URL = WEBAPP_URL
+
+
+def _webapp_domain_hint() -> str:
+    return urlparse(WEBAPP_URL).netloc or WEBAPP_URL
 
 RAILWAY_API = "https://eticket.railway.uz/api/v3/handbook/trains/list"
 RAILWAY_HEADERS = {
@@ -121,18 +148,44 @@ def format_trains(data: dict, from_name: str, to_name: str, date: str) -> str:
 
 # --- BOT HANDLERLAR ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(
-            "🎫 Chipta qidirish (Mini App)",
-            web_app=WebAppInfo(url=WEBAPP_URL)
-        )],
-        [InlineKeyboardButton("🔍 Inline qidiruv", callback_data="new_search")],
-    ]
-    await update.message.reply_text(
+    inline = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🔍 Inline qidiruv", callback_data="new_search")]]
+    )
+    # iOS Telegram: KeyboardButton+web_app ko'pincha InlineKeyboard dan ishonchliroq ichki WebView ochadi
+    reply_kb = ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton(
+                    text="🎫 Chipta qidirish (Mini App)",
+                    web_app=WebAppInfo(url=WEBAPP_URL),
+                )
+            ]
+        ],
+        resize_keyboard=True,
+    )
+    domain_hint = _webapp_domain_hint()
+    welcome = (
         "👋 Salom! Men <b>O'zbekiston temir yo'llari</b> chipta qidiruv botiman.\n\n"
-        "Quyidagi usullardan birini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML"
+        "<b>Telegramda ochish (iPhone):</b> avvalo <b>pastdagi 🎫 tugmani</b> bosing — "
+        "odatda ilova ichida ochiladi. Chap-pastki <b>☰ menyuda</b> ham 🎫 bo'lishi mumkin.\n\n"
+        "Agar brauzer ochilsa: Telegram <b>Mini App domenini</b> talab qiladi. @BotFather → botingiz → "
+        "<b>Bot Settings</b> → <b>Configure Mini App</b> / <b>Edit Mini App URL</b> "
+        "(yoki <i>Domain</i>) — quyidagi hostname ni qo'shing: "
+        f"<code>{domain_hint}</code>\n\n"
+        "Pastki klaviaturani yashirish: /yop"
+    )
+    await update.message.reply_text(welcome, reply_markup=reply_kb, parse_mode="HTML")
+    await update.message.reply_text(
+        "Matnli qidiruv (chat ichida):",
+        reply_markup=inline,
+        parse_mode="HTML",
+    )
+
+
+async def yop_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Pastki tugmalar yashirildi.",
+        reply_markup=ReplyKeyboardRemove(),
     )
 
 
@@ -426,6 +479,8 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         async with _httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{SERVER_URL}/api/purchase", json={
                 "user_id":      user_id,
+                "from_code":    data.get("from_code"),
+                "to_code":      data.get("to_code"),
                 "from_name":    data.get("from_name"),
                 "to_name":      data.get("to_name"),
                 "date":         data.get("date"),
@@ -447,13 +502,17 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- ASOSIY ---
 async def post_init(application):
     """Bot ishga tushganda menu tugmasini o'rnatish."""
+    if "localhost" in WEBAPP_URL or "127.0.0.1" in WEBAPP_URL:
+        print(f"⚠️  WEBAPP_URL={WEBAPP_URL} — telefonda Mini App ishlamaydi; .env da HTTPS manzil qo'ying.")
+        return
     await application.bot.set_chat_menu_button(
         menu_button=MenuButtonWebApp(
             text="🎫 Chipta qidirish",
             web_app=WebAppInfo(url=WEBAPP_URL),
         )
     )
-    print(f"✅ Menu button o'rnatildi: {WEBAPP_URL}")
+    print(f"✅ Menu button: {WEBAPP_URL}")
+    print(f"   BotFather'da Mini App hostname: {_webapp_domain_hint()}")
 
 
 def main():
@@ -489,6 +548,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("yop", yop_keyboard))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(CallbackQueryHandler(confirm_buy_callback, pattern="^confirm_buy:|^cancel_buy$"))
     app.add_handler(conv)

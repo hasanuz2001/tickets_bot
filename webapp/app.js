@@ -50,12 +50,43 @@ const BRAND_CLASS = {
   "Cкорый":    "brand-express",
 };
 
+/** API dagi vagon nomi → Ekonom / Business / VIP guruhlari */
+const COMFORT_OPTIONS = [
+  { id: "all", label: "Barcha turlar", icon: "🎫", hint: "Platskart, kupe, SV, lyuks va boshqalar" },
+  { id: "economy", label: "Ekonom", icon: "🛤", hint: "Platskart, sidyachiy, obshchiy" },
+  { id: "business", label: "Business", icon: "🛏", hint: "Kupe klass" },
+  { id: "vip", label: "VIP", icon: "⭐", hint: "SV, lyuks" },
+];
+
+function comfortLabel(comfortId) {
+  const o = COMFORT_OPTIONS.find(x => x.id === comfortId);
+  return o ? o.label : "Barcha turlar";
+}
+
+function carMatchesComfort(carTypeName, comfort) {
+  if (!comfort || comfort === "all") return true;
+  const n = (carTypeName || "").toLowerCase();
+  if (comfort === "economy") {
+    return ["плацкарт", "сидяч", "общ", "эконом"].some(k => n.includes(k));
+  }
+  if (comfort === "business") {
+    return ["купе", "бизнес", "business"].some(k => n.includes(k));
+  }
+  if (comfort === "vip") {
+    if (["люкс", "lux", "vip", "спальн"].some(k => n.includes(k))) return true;
+    const t = n.replace(/[\s.№]/g, "");
+    return t === "св";
+  }
+  return true;
+}
+
 // ───────────────────────────── STATE ─────────────────────────────────────────
 const state = {
   fromCode: null, fromName: null,
   toCode:   null, toName:   null,
   date:     null, dateLabel: null,
   timeFrom: null, timeTo: null,   // "08:00" formatida, null = filtr yo'q
+  comfortClass: "all",             // all | economy | business | vip
   pickerTarget: null,
   screenStack: ["screenMain"],
   activeSubs: {},
@@ -76,6 +107,7 @@ function showScreen(id) {
     screenStation:       "Stansiya tanlang",
     screenDate:          "Sana tanlang",
     screenTime:          "Vaqt oralig'i",
+    screenComfort:       "Joy turi",
     screenResults:       "Natijalar",
     screenSubscriptions: "🔔 Kuzatishlarim",
     screenProfile:       "👤 Profil",
@@ -234,6 +266,31 @@ function confirmTime() {
   showScreen("screenMain");
 }
 
+// ───────────────────────────── JOY TURI (COMFORT) ────────────────────────────
+function openComfortPicker() {
+  renderComfortPicker();
+  showScreen("screenComfort");
+}
+
+function renderComfortPicker() {
+  document.getElementById("comfortOptions").innerHTML = COMFORT_OPTIONS.map(o => `
+    <div class="comfort-option ${state.comfortClass === o.id ? "selected" : ""}"
+         onclick="selectComfort('${o.id}')">
+      <span class="comfort-option-icon">${o.icon}</span>
+      <div class="comfort-option-text">
+        <div class="comfort-option-title">${o.label}</div>
+        <div class="comfort-option-desc">${o.hint}</div>
+      </div>
+    </div>`).join("");
+}
+
+function selectComfort(id) {
+  state.comfortClass = COMFORT_OPTIONS.some(x => x.id === id) ? id : "all";
+  setField("comfortValue", comfortLabel(state.comfortClass));
+  state.screenStack = state.screenStack.filter(s => s !== "screenComfort");
+  showScreen("screenMain");
+}
+
 // ───────────────────────────── FIELD HELPERS ─────────────────────────────────
 function setField(id, text) {
   const el = document.getElementById(id);
@@ -241,7 +298,10 @@ function setField(id, text) {
 }
 function clearField(id) {
   const el = document.getElementById(id);
-  const defaults = { fromValue: "Stansiya tanlang", toValue: "Stansiya tanlang", dateValue: "Sana tanlang" };
+  const defaults = {
+    fromValue: "Stansiya tanlang", toValue: "Stansiya tanlang", dateValue: "Sana tanlang",
+    comfortValue: "Barcha turlar",
+  };
   el.textContent = defaults[id] || ""; el.classList.remove("selected");
 }
 function updateSearchBtn() {
@@ -273,13 +333,16 @@ function renderResults(data) {
   const timeInfo = (state.timeFrom || state.timeTo)
     ? `&nbsp;⏰ ${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}`
     : "";
+  const comfortInfo = state.comfortClass && state.comfortClass !== "all"
+    ? `&nbsp;🪑 ${comfortLabel(state.comfortClass)}`
+    : "";
   document.getElementById("resultsHeader").innerHTML = `
     <div class="route-info">
       <span>${state.fromName}</span>
       <span class="route-arrow">→</span>
       <span>${state.toName}</span>
     </div>
-    <div class="date-info">📅 ${state.dateLabel}${timeInfo}</div>`;
+    <div class="date-info">📅 ${state.dateLabel}${timeInfo}${comfortInfo}</div>`;
 
   const subKey = subKeyOf(state.fromCode, state.toCode, state.date);
   const isWatching = !!state.activeSubs[subKey];
@@ -295,35 +358,48 @@ function renderResults(data) {
   };
 
   const timeFilteredTrains = trains.filter(inTimeRange);
-  const availableTrains = timeFilteredTrains.filter(t => (t.cars || []).some(c => c.freeSeats > 0));
+  const rawAvailable = timeFilteredTrains.filter(t =>
+    (t.cars || []).some(c => c.freeSeats > 0)
+  );
+  const availableTrains = rawAvailable
+    .map(t => ({
+      ...t,
+      cars: (t.cars || []).filter(c =>
+        c.freeSeats > 0 && carMatchesComfort(c.carTypeName, state.comfortClass)
+      ),
+    }))
+    .filter(t => t.cars.length > 0);
 
   let html = "";
 
-  const noTrainsAtAll  = trains.length === 0;
-  const noInTimeRange  = timeFilteredTrains.length === 0 && trains.length > 0;
-  const noSeats        = availableTrains.length === 0 && timeFilteredTrains.length > 0;
+  const noTrainsAtAll   = trains.length === 0;
+  const noInTimeRange   = timeFilteredTrains.length === 0 && trains.length > 0;
+  const timeFilteredEmpty = timeFilteredTrains.length === 0;
+  const noSeatsComfort  = !timeFilteredEmpty && rawAvailable.length > 0 && availableTrains.length === 0
+    && state.comfortClass !== "all";
+  const noSeatsRaw      = !timeFilteredEmpty && rawAvailable.length === 0;
 
-  if (noTrainsAtAll || noInTimeRange || noSeats) {
-    let icon, title, msg, showWatch;
+  if (noTrainsAtAll || noInTimeRange || noSeatsComfort || noSeatsRaw) {
+    let icon, title, msg;
     if (noTrainsAtAll) {
       icon = "🚫"; title = "Poyezd topilmadi";
-      msg = "Bu sana uchun ushbu yo'nalishda poyezd mavjud emas.";
-      showWatch = false;
+      msg = "Bu sana uchun ushbu yo'nalishda hozircha reys ko'rinmayapti. Bilet chiqishi yoki bo'sh joy paydo bo'lishi bilanoq bildirishnoma olish uchun pastdagi tugmani bosing — bot har 10 daqiqada tekshiradi va Telegramga xabar yuboradi.";
     } else if (noInTimeRange) {
       icon = "⏰"; title = "Bu vaqtda poyezd yo'q";
-      msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida poyezd topilmadi. Vaqt oralig'ini kengaytiring.`;
-      showWatch = false;
+      msg = `${state.timeFrom || "00:00"}–${state.timeTo || "23:59"} oralig'ida jo'nash topilmadi. Vaqt oralig'ini kengaytirishingiz mumkin yoki shu filtr bilan kuzating — tanlangan vaqtda joy ochilishi bilanoq bildirishnoma yuboramiz (har 10 daqiqada).`;
+    } else if (noSeatsComfort) {
+      icon = "🪑"; title = "Bu joy turida bo'sh joy yo'q";
+      msg = `${comfortLabel(state.comfortClass)} uchun bo'sh joy topilmadi. "Barcha turlar"ni tanlang yoki boshqa tur bilan qidiring. Kuzatuvni yoqsangiz, kerakli turda joy ochilganda xabar beramiz.`;
     } else {
       icon = "😕"; title = "Bo'sh o'rin yo'q";
-      msg = "Tanlangan vaqtda barcha vagonlarda joy band. Bot bilet chiqishi bilanoq xabar beradi.";
-      showWatch = true;
+      msg = "Tanlangan vaqtda barcha vagonlarda joy band. Kuzatuvni yoqsangiz, bo'sh joy chiqishi bilan Telegram orqali bildirishnoma olasiz; \"Avtomatik sotib olish\" bo'lsa, bilet paydo bo'lishi bilan xaridga harakat qilinadi (har 10 daqiqada tekshiriladi).";
     }
     html = `
       <div class="no-seats-banner">
         <div class="banner-icon">${icon}</div>
         <h3>${title}</h3>
         <p>${msg}</p>
-        ${showWatch ? buildBigWatchBtn(subKey, isWatching) : ""}
+        ${buildBigWatchBtn(subKey, isWatching)}
       </div>`;
   } else {
     // Show trains with seats
@@ -433,14 +509,20 @@ async function subscribe(subKey, autoBuy = false) {
         time_from:  state.timeFrom || null,
         time_to:    state.timeTo   || null,
         auto_buy:   autoBuy,
+        comfort_class: state.comfortClass || "all",
       }),
     });
     if (res.status === "ok" || res.status === "already_exists") {
       state.activeSubs[subKey] = res.id;
-      showToast(autoBuy
-        ? "🤖 Bilet chiqsa avtomatik sotib olinadi!"
-        : "✅ Kuzatuv yoqildi!"
-      );
+      const warns = res.auto_buy_warnings || [];
+      if (autoBuy && warns.length) {
+        showToast(warns[0]);
+      } else {
+        showToast(autoBuy
+          ? "🤖 Kuzatuv yoqildi. Bilet chiqishi bilan jarayon boshlanadi (bir necha soniya ichida tekshiriladi)."
+          : "✅ Kuzatuv yoqildi!"
+        );
+      }
       refreshResultButtons(subKey, true);
       updateBellBadge();
     }
@@ -507,7 +589,7 @@ function renderSubscriptions(subs) {
       <div class="subs-empty">
         <div class="subs-empty-icon">🔕</div>
         <h3>Kuzatishlar yo'q</h3>
-        <p>Poyezd qidirganda "Bilet chiqsa xabar ber" tugmasini bosing — bot bilet paydo bo'lishi bilanoq sizga Telegram xabar yuboradi.</p>
+        <p>Poyezd qidirganda natijalar ekranidagi kuzatuv tugmasini bosing — hozir chipta ko'rinmasa ham bot har 10 daqiqada tekshiradi va bilet yoki bo'sh joy paydo bo'lishi bilanoq bildirishnoma yuboradi.</p>
       </div>`;
     return;
   }
@@ -524,7 +606,7 @@ function renderSubscriptions(subs) {
         <div class="sub-icon">🚆</div>
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
-          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}</div>
+          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${s.comfort_class && s.comfort_class !== "all" ? `&nbsp;🪑 ${comfortLabel(s.comfort_class)}` : ""}</div>
           <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Kuzatilmoqda"} (har 10 daqiqa)</span>
         </div>
         <button class="sub-delete" onclick="deleteSubFromList(${s.id},'${subKeyOf(s.from_code, s.to_code, s.date)}')" title="O'chirish">
@@ -691,6 +773,8 @@ function requestBuyTicket(train) {
   }
   const payload = JSON.stringify({
     action:    "buy",
+    from_code: state.fromCode,
+    to_code:   state.toCode,
     from_name: state.fromName,
     to_name:   state.toName,
     date:      state.date,

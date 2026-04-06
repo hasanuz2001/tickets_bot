@@ -677,6 +677,55 @@ body {
 }
 .time-confirm-btn:active { opacity: 0.8; }
 
+/* ===== COMFORT / JOY TURI ===== */
+.comfort-icon {
+  background: rgba(52,199,89,0.12);
+  color: #34c759;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.comfort-icon-emoji { font-size: 14px; line-height: 1; }
+
+.comfort-picker-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.comfort-picker-hint {
+  font-size: 13px;
+  color: var(--tg-hint);
+  line-height: 1.45;
+  margin: 0 2px;
+}
+.comfort-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.comfort-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 16px;
+  background: var(--tg-bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all var(--transition);
+  text-align: left;
+}
+.comfort-option:active { transform: scale(0.99); }
+.comfort-option.selected {
+  border-color: var(--tg-btn);
+  background: rgba(36,129,204,0.06);
+}
+.comfort-option-icon { font-size: 26px; line-height: 1; flex-shrink: 0; }
+.comfort-option-text { flex: 1; min-width: 0; }
+.comfort-option-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; color: var(--tg-text); }
+.comfort-option-desc { font-size: 12px; color: var(--tg-hint); line-height: 1.35; }
+
 /* ===== TRAIN BRAND BADGE ===== */
 .train-brand {
   display: inline-flex; align-items: center; gap: 4px;
