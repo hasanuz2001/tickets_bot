@@ -178,6 +178,50 @@ async def _dismiss_railway_overlays(page) -> None:
             pass
 
 
+async def _log_railway_ui_snapshot(page, step: str) -> None:
+    """
+    Journal tahlili: URL, sd-value, search-trains qisqa matn, 'poyezd yo'q' belgisi, .result-card soni.
+    """
+    try:
+        data = await page.evaluate(
+            """() => {
+                const t = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                const body = t(document.body && document.body.innerText || '');
+                const href = location.href;
+                const sd = sessionStorage.getItem('sd-value');
+                const bar = document.querySelector("[class*='search-trains']");
+                const barSnippet = bar ? t(bar.innerText).slice(0, 400) : '';
+                const noTrainBanner = /mavjud\\s+emas|поезд.*нет|нет\\s+поездов|не\\s+найден/i.test(body);
+                let trainClassNodes = 0;
+                try {
+                    document.querySelectorAll("[class*='train']").forEach((el) => {
+                        const c = String(el.className || '');
+                        if (c && !c.includes('search-trains')) trainClassNodes++;
+                    });
+                } catch (e) {}
+                const resultCards = document.querySelectorAll('.result-card').length;
+                const hasSpinner = !!document.querySelector("[class*='spinner'], [class*='loader'], .mat-progress-spinner");
+                return {
+                    href: href.slice(0, 240),
+                    sd,
+                    barSnippet,
+                    noTrainBanner,
+                    trainClassNodes,
+                    resultCards,
+                    hasSpinnerGuess: hasSpinner,
+                    bodyHead: body.slice(0, 360),
+                };
+            }"""
+        )
+        logger.info(
+            "[railway][ui_snapshot] step=%s | %s",
+            step,
+            json.dumps(data, ensure_ascii=False),
+        )
+    except Exception as e:
+        logger.warning("[railway][ui_snapshot] step=%s xato=%s", step, e)
+
+
 async def _fill_date_via_calendar_trigger(page, bar, dotted: str) -> bool:
     """
     Sana matni ('07 Aprel' / NBSP) — bosiladi, keyin popup yoki klaviatura bilan DD.MM.YYYY.
@@ -245,8 +289,9 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     Yashirin input: scroll QO'YMAY fill+Angular setter; bo'lmasa kalendar matni.
     """
     d_iso = (date_iso or "").strip()[:10]
-    logger.info("[railway] sana qadam: date_iso=%s", d_iso)
+    logger.info("[railway][date] === boshlandi: date_iso=%s dotted=%s", d_iso, _iso_to_railway_dotted(d_iso))
     await _dismiss_railway_overlays(page)
+    await _log_railway_ui_snapshot(page, "date_after_dismiss")
 
     dotted = _iso_to_railway_dotted(d_iso)
     bar = page.locator("[class*='search-trains']").first
@@ -255,13 +300,14 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             "[railway] search-trains konteyner topilmadi — sana yozilmaydi (BETA boshqa class?). URL=%s",
             (await page.evaluate("() => location.href"))[:200],
         )
+        await _log_railway_ui_snapshot(page, "date_no_search_bar")
         return
 
     all_inp = bar.locator("input")
     n_all = await all_inp.count()
     vis = bar.locator("input:visible")
     cnt_vis = await vis.count()
-    logger.info("[railway] input jami=%s, :visible=%s", n_all, cnt_vis)
+    logger.info("[railway][date] inputlar: jami=%s visible=%s", n_all, cnt_vis)
 
     target = None
     pick_reason = ""
@@ -289,10 +335,13 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
 
     # 1) Uchunchi input — yashirin: scroll_into_view TALAB QILINMAYDI (30s hang oldini)
     if n_all >= 3:
+        logger.info("[railway][date] qadam 1/5: input[2] (nth 2) sinov")
         await try_locator("input[2]", all_inp.nth(2))
+        logger.info("[railway][date] qadam 1 natija: date_ok=%s pick=%s", date_ok, pick_reason or "-")
 
     # 2) Atributlar bo'yicha
     if not date_ok:
+        logger.info("[railway][date] qadam 2/5: atributlar (date/forward/sana...)")
         for i in range(n_all):
             el = all_inp.nth(i)
             try:
@@ -318,9 +367,11 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             ):
                 if await try_locator(f"attr[{i}]", el):
                     break
+        logger.info("[railway][date] qadam 2 natija: date_ok=%s pick=%s", date_ok, pick_reason or "-")
 
     # 3) Ko'rinadigan: faqat sanaga o'xshash yoki 3+ input
     if not date_ok:
+        logger.info("[railway][date] qadam 3/5: visible pattern / placeholder")
         for i in range(cnt_vis):
             el = vis.nth(i)
             try:
@@ -350,9 +401,11 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
                     date_ok = True
             except Exception as e:
                 logger.warning("[railway] visible nth(2): %s", e)
+        logger.info("[railway][date] qadam 3 natija: date_ok=%s pick=%s", date_ok, pick_reason or "-")
 
     # 4) form__field[2]
     if not date_ok:
+        logger.info("[railway][date] qadam 4/5: form__field[2]")
         fields = bar.locator("[class*='form__field'], [class*='field']").filter(
             has=page.locator("input")
         )
@@ -363,6 +416,7 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
 
     # 5) Kalendar matni — input bo'sh qolganda yoki hali OK emas
     if not date_ok:
+        logger.info("[railway][date] qadam 5/5: kalendar trigger")
         if await _fill_date_via_calendar_trigger(page, bar, dotted):
             pick_reason = (pick_reason + "+" if pick_reason else "") + "calendar"
             date_ok = True
@@ -383,9 +437,10 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
 
     if target is not None:
         after = await _read_input_value_safe(target)
-        logger.info("[railway] sana input dan keyin: %r", after[:120])
+        logger.info("[railway][date] sana input dan keyin: %r", after[:120])
 
     await _dismiss_railway_overlays(page)
+    await _log_railway_ui_snapshot(page, "before_izlash")
 
     search_btn = bar.locator("button").filter(
         has_text=re.compile(r"Izlash|Qidirish|Найти", re.I)
@@ -394,8 +449,9 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         try:
             await search_btn.scroll_into_view_if_needed()
             await search_btn.click(timeout=6000)
-            logger.info("[railway] Izlash bosildi (search-trains paneli)")
+            logger.info("[railway][date] Izlash bosildi (search-trains paneli), 2.8s kutish")
             await page.wait_for_timeout(2800)
+            await _log_railway_ui_snapshot(page, "after_izlash_wait")
             return
         except Exception as ex:
             logger.warning("[railway] Izlash bosishda xato: %s", ex)
@@ -405,12 +461,14 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     if await legacy.count():
         try:
             await legacy.click(timeout=6000)
-            logger.info("[railway] Izlash bosildi (legacy selector)")
+            logger.info("[railway][date] Izlash bosildi (legacy selector), 2.8s kutish")
             await page.wait_for_timeout(2800)
+            await _log_railway_ui_snapshot(page, "after_izlash_wait_legacy")
         except Exception as ex:
             logger.warning("[railway] legacy Izlash: %s", ex)
     else:
         logger.warning("[railway] Izlash tugmasi search-trains ichida topilmadi")
+        await _log_railway_ui_snapshot(page, "izlash_button_missing")
 
 
 async def _open_trains_search(
@@ -456,17 +514,20 @@ async def _open_trains_search(
         }""",
         [d_iso, saved_payload, str(from_code), str(to_code), fn, tn],
     )
+    await _log_railway_ui_snapshot(page, "open_trains_after_session_pre_goto")
 
     logger.info(
-        "[railway] trains ochish: date_iso=%s %s→%s url=%s",
+        "[railway][open_trains] goto: date_iso=%s %s→%s url_len=%s",
         d_iso,
         from_code,
         to_code,
-        trains_url[:120],
+        len(trains_url),
     )
+    logger.info("[railway][open_trains] url_sample=%s", trains_url[:200])
     # To'liq query (sd-value, sf-code, ...) — faqat plain /trains-page ba'zan UI "bugun"da qoladi
     await page.goto(trains_url, wait_until=_WAIT, timeout=45000)
     await _dismiss_railway_overlays(page)
+    await _log_railway_ui_snapshot(page, "open_trains_after_goto")
     try:
         href = await page.evaluate("() => location.href")
         snap = await page.evaluate(
@@ -493,9 +554,13 @@ async def _open_trains_search(
         )
     except PWTimeout:
         logger.warning("[railway] trains: sessionStorage (sd/sf/st) kutilmadi")
+        await _log_railway_ui_snapshot(page, "open_trains_sessionstorage_timeout")
 
     await page.wait_for_timeout(1800)
+    await _log_railway_ui_snapshot(page, "open_trains_before_date_research")
     await _type_trains_search_date_and_research(page, d_iso)
+    await _log_railway_ui_snapshot(page, "open_trains_after_date_research")
+    logger.info("[railway][open_trains] tugadi, trains_url=%s", trains_url[:220])
     return trains_url
 
 # networkidle SPA da tez-tez osilib qoladi — asosan domcontentloaded
@@ -695,32 +760,59 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
     if not tnum:
         return False
 
+    await _log_railway_ui_snapshot(page, "click_buy_before_scan")
     variants = _train_number_match_variants(tnum)
+    logger.info(
+        "[buy][click_train] boshlandi tnum=%r variantlar=%s",
+        tnum,
+        variants[:10],
+    )
     marker = None
+    chosen = None
     for cand in variants:
         cands = [
-            page.locator(f"text=№{cand}").first,
-            page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}", re.I)).first,
-            page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}\b", re.I)).first,
+            ("text_eq", page.locator(f"text=№{cand}").first),
+            ("regex_loose", page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}", re.I)).first),
+            ("regex_word", page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}\b", re.I)).first),
         ]
         digits = re.sub(r"\D", "", cand)
         if len(digits) >= 2 and cand == digits:
             cands.append(
-                page.get_by_text(re.compile(rf"№\s*{re.escape(digits)}\s*[ФFf]?", re.I)).first
+                (
+                    "regex_digits_letter",
+                    page.get_by_text(re.compile(rf"№\s*{re.escape(digits)}\s*[ФFf]?", re.I)).first,
+                )
             )
-        for loc in cands:
+        for kind, loc in cands:
             try:
-                if await loc.count():
+                cnt = await loc.count()
+                logger.info(
+                    "[buy][click_train] sinov cand=%r kind=%s count=%s",
+                    cand,
+                    kind,
+                    cnt,
+                )
+                if cnt:
                     marker = loc
+                    chosen = (cand, kind)
                     break
-            except Exception:
+            except Exception as ex:
+                logger.info(
+                    "[buy][click_train] sinov cand=%r kind=%s xato=%s",
+                    cand,
+                    kind,
+                    ex,
+                )
                 continue
         if marker:
             break
 
     if not marker or not await marker.count():
         logger.warning("[buy] Poyezd №%s topilmadi (qidiruv: %s)", tnum, variants[:6])
+        await _log_railway_ui_snapshot(page, "click_buy_train_not_found")
         return False
+
+    logger.info("[buy][click_train] topildi: %s", chosen)
 
     await marker.scroll_into_view_if_needed()
     await page.wait_for_timeout(400)
@@ -745,10 +837,13 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
         ).first
     if not await buy_btn.count():
         logger.warning("[buy] Sotib olish tugmasi topilmadi (№%s)", tnum)
+        await _log_railway_ui_snapshot(page, "click_buy_button_missing")
         return False
 
+    logger.info("[buy][click_train] sotib olish tugmasi topildi, click")
     await buy_btn.click(timeout=12000)
     await page.wait_for_timeout(2200)
+    await _log_railway_ui_snapshot(page, "click_buy_after_click")
     return True
 
 
@@ -988,19 +1083,40 @@ async def buy_ticket(
                 scr = await page.screenshot(full_page=True)
                 return {"status": "error", "message": msg, "screenshot": scr}
 
+            logger.info(
+                "[buy_ticket][1/6] login OK | yo'nalish %s→%s sana=%s poyezd=%r",
+                from_name or from_code,
+                to_name or to_code,
+                date,
+                train_number,
+            )
+
             trains_url = await _open_trains_search(
                 page, from_code, to_code, from_name, to_name, date
             )
-            logger.info("[buy_ticket] Trains: %s", trains_url)
+            logger.info("[buy_ticket][2/6] open_trains tugadi | url=%s", trains_url[:240])
 
-            await page.wait_for_selector(
+            sel_train = (
                 "[class*='train']:not([class*='search-trains']), "
                 "[class*='Train']:not([class*='search-trains']), "
-                ".result-card",
-                timeout=25000,
+                ".result-card"
             )
-            logger.info("[buy_ticket] poyezdlar ro'yxati DOMda paydo bo'ldi (yoki shunga o'xshash element)")
+            logger.info(
+                "[buy_ticket][3/6] kutilmoqda DOM selector (25s): %s",
+                sel_train[:120],
+            )
+            try:
+                await page.wait_for_selector(sel_train, timeout=25000)
+            except PWTimeout:
+                await _log_railway_ui_snapshot(page, "buy_ticket_train_selector_timeout")
+                logger.warning("[buy_ticket][3/6] TIMEOUT: poyezd/ro'yxat selector 25s ichida yo'q")
+                raise
+            logger.info(
+                "[buy_ticket][4/6] selector topildi (ehtimol chalkashuv: search-trains emas train class)"
+            )
+            await _log_railway_ui_snapshot(page, "buy_ticket_after_list_selector")
 
+            logger.info("[buy_ticket][5/6] _click_buy_for_train(%r)", train_number)
             if not await _click_buy_for_train(page, train_number):
                 scr = await page.screenshot(full_page=True)
                 return {
@@ -1009,6 +1125,7 @@ async def buy_ticket(
                     "screenshot": scr,
                 }
 
+            logger.info("[buy_ticket][6/6] vagon/joy va yo'lovchi bosqichlari")
             await _pick_car_and_seat(page, car_type or "")
             await page.wait_for_timeout(800)
             await _fill_passenger(page, passenger)
