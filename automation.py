@@ -54,11 +54,88 @@ def _trains_page_url(
 def _iso_to_railway_dmy(date_iso: str) -> str:
     """
     Angular dateSelect: forwardDate = DD-MM-YYYY (chiziqlar).
-    sd-value (YYYY-MM-DD) + beautifyDate odatda kalendar "bugun"da qoladi.
+    savedData / sessionStorage uchun.
     """
     raw = (date_iso or "").strip()[:10]
     dt = datetime.strptime(raw, "%Y-%m-%d")
     return dt.strftime("%d-%m-%Y")
+
+
+def _iso_to_railway_dotted(date_iso: str) -> str:
+    """Maskali maydon: DD.MM.YYYY (sayt dateMask nuqta bilan)."""
+    raw = (date_iso or "").strip()[:10]
+    dt = datetime.strptime(raw, "%Y-%m-%d")
+    return dt.strftime("%d.%m.%Y")
+
+
+async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
+    """
+    redirectedFromHome + dateSelect ba'zan ngOnInitda (ViewChild) ishlamaydi — sana bugun qoladi.
+    Qidiruv panelidagi maskali sana maydoniga DD.MM.YYYY yozib, Izlash/Найти bosiladi.
+    """
+    dotted = _iso_to_railway_dotted(date_iso)
+    bar = page.locator("[class*='search-trains']").first
+    if not await bar.count():
+        logger.warning("[railway] search-trains konteyner topilmadi — sana qo'lda yozilmadi")
+        return
+
+    inputs = bar.locator("input:visible")
+    cnt = await inputs.count()
+    target = None
+    for i in range(cnt):
+        el = inputs.nth(i)
+        try:
+            val = await el.input_value()
+            ph = (await el.get_attribute("placeholder")) or ""
+        except Exception:
+            continue
+        if re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val) or re.search(
+            r"\d{1,2}\s+[A-Za-zА-Яа-я]", val
+        ):
+            target = el
+            break
+        if any(x in ph.lower() for x in ("dd", "kun", "sana", "date", "гггг", "yyyy")):
+            target = el
+            break
+    if target is None:
+        if cnt >= 3:
+            target = inputs.nth(2)
+        elif cnt >= 1:
+            target = inputs.nth(cnt - 1)
+        else:
+            logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s)", cnt)
+            return
+
+    try:
+        await target.click(timeout=8000)
+        await target.press("Control+a")
+        await page.wait_for_timeout(120)
+        await page.keyboard.type(dotted, delay=95)
+        await page.wait_for_timeout(350)
+    except Exception as e:
+        logger.warning("[railway] sana yozishda xato: %s", e)
+        return
+
+    search_btn = page.get_by_role(
+        "button",
+        name=re.compile(r"Izlash|IZLASH|Qidirish|Найти", re.I),
+    ).first
+    if await search_btn.count():
+        try:
+            await search_btn.click(timeout=6000)
+            await page.wait_for_timeout(2800)
+            return
+        except Exception:
+            pass
+    legacy = page.locator(
+        "button:has-text('Izlash'), button:has-text('Найти'), button:has-text('Qidirish')"
+    ).first
+    if await legacy.count():
+        try:
+            await legacy.click(timeout=6000)
+            await page.wait_for_timeout(2800)
+        except Exception:
+            pass
 
 
 async def _open_trains_search(
@@ -120,7 +197,8 @@ async def _open_trains_search(
     except PWTimeout:
         logger.warning("[railway] trains: sessionStorage (sd/sf/st) kutilmadi")
 
-    await page.wait_for_timeout(2200)
+    await page.wait_for_timeout(1800)
+    await _type_trains_search_date_and_research(page, d_iso)
     return trains_url
 
 # networkidle SPA da tez-tez osilib qoladi — asosan domcontentloaded
