@@ -1,6 +1,6 @@
 """
-eticket.railway.uz — RAILWAY_LOGIN: telefon (9 yoki 998... raqam; formaga faqat 9 ta yoziladi) yoki email (@).
-RAILWAY_PASSWORD bilan avtomatik bron. Playwright: login → poyezdlar → sotib olish → to'lov.
+eticket.railway.uz — RAILWAY_LOGIN: telefon (9 yoki 998...) yoki email (@), RAILWAY_PASSWORD.
+Default UI: o'zbekcha (/uz/auth/login, /uz/pages/...). RAILWAY_UI_LANG=ru — ruscha sahifa.
 """
 
 import json
@@ -19,8 +19,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 RAILWAY = "https://eticket.railway.uz"
+# Barcha avtomatika o'zbek interfeysi: /uz/auth/login, /uz/pages/trains-page
+RAILWAY_UI_LANG = os.getenv("RAILWAY_UI_LANG", "uz").strip().lower() or "uz"
 RAILWAY_LOGIN = os.getenv("RAILWAY_LOGIN", "").strip()
 RAILWAY_PASS = os.getenv("RAILWAY_PASSWORD", "").strip()
+_BROWSER_LOCALE = "uz-UZ" if RAILWAY_UI_LANG.startswith("uz") else "ru-RU"
 
 
 def _trains_page_url(
@@ -29,13 +32,14 @@ def _trains_page_url(
     from_name: str,
     to_name: str,
     date_iso: str,
-    lang: str = "ru",
+    lang: str | None = None,
 ) -> str:
     """
     SPA depCode/arvCode ni URL dan o'qimaydi. Query: sd-value (YYYY-MM-DD), sf-code/st-code,
     sf-name/st-name; sd-value2 bo'sh — faqat yo'nalish.
-    Default lang=ru — login /ru/auth/login bilan bir xil domen yo'li, ba'zan /uz bilan query yo'qoladi.
     """
+    if lang is None:
+        lang = RAILWAY_UI_LANG
     pairs = [
         ("sd-value", date_iso),
         ("sd-value2", ""),
@@ -73,9 +77,19 @@ async def _open_trains_search(
     tn = (to_name or "").strip() or str(to_code)
     d_iso = (date_iso or "").strip()[:10]
     dmy = _iso_to_railway_dmy(d_iso)
-    saved_payload = json.dumps({"forwardDate": dmy})
-    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, d_iso, lang="ru")
-    plain_trains = f"{RAILWAY}/ru/pages/trains-page"
+    saved_payload = json.dumps(
+        {
+            "stations": {
+                "from": {"code": str(from_code), "nameRu": fn},
+                "to": {"code": str(to_code), "nameRu": tn},
+            },
+            "forwardDate": dmy,
+        },
+        ensure_ascii=False,
+    )
+    lang = RAILWAY_UI_LANG
+    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, d_iso, lang=lang)
+    plain_trains = f"{RAILWAY}/{lang}/pages/trains-page"
     arg = [d_iso, str(from_code), str(to_code)]
 
     await page.evaluate(
@@ -172,11 +186,14 @@ def _browser_args() -> list[str]:
 
 async def _login_railway(page) -> tuple[bool, str]:
     """
-    /ru/auth/login — telefon yoki pochta (RAILWAY_LOGIN da @ bo'lsa pochta).
-    UZ interfeysda TELEFON/POCHTA, VOITI tugmalari ham qo'llab-quvvatlanadi.
+    /uz/auth/login (default) — telefon yoki pochta. RU yozuvlari zaxira sifatida qoldirilgan.
     """
     try:
-        await page.goto(f"{RAILWAY}/ru/auth/login", wait_until=_WAIT, timeout=35000)
+        await page.goto(
+            f"{RAILWAY}/{RAILWAY_UI_LANG}/auth/login",
+            wait_until=_WAIT,
+            timeout=35000,
+        )
     except Exception as e:
         return False, f"Login sahifasini ochib bo'lmadi: {e}"
 
@@ -186,13 +203,14 @@ async def _login_railway(page) -> tuple[bool, str]:
 
     if use_email:
         for sel in (
+            "button:has-text('POCHTA')",
+            "span:has-text('POCHTA')",
+            "div[role='tab']:has-text('POCHTA')",
+            "a:has-text('POCHTA')",
             "button:has-text('ПОЧТА')",
             "span:has-text('ПОЧТА')",
             "div[role='tab']:has-text('ПОЧТА')",
             "a:has-text('ПОЧТА')",
-            "button:has-text('POCHTA')",
-            "span:has-text('POCHTA')",
-            "div[role='tab']:has-text('POCHTA')",
         ):
             tab = page.locator(sel).first
             if await tab.count():
@@ -205,13 +223,14 @@ async def _login_railway(page) -> tuple[bool, str]:
                 break
     else:
         for sel in (
+            "button:has-text('TELEFON')",
+            "span:has-text('TELEFON')",
+            "div[role='tab']:has-text('TELEFON')",
+            "a:has-text('TELEFON')",
             "button:has-text('ТЕЛЕФОН')",
             "span:has-text('ТЕЛЕФОН')",
             "div[role='tab']:has-text('ТЕЛЕФОН')",
             "a:has-text('ТЕЛЕФОН')",
-            "button:has-text('TELEFON')",
-            "span:has-text('TELEFON')",
-            "div[role='tab']:has-text('TELEFON')",
         ):
             tab = page.locator(sel).first
             if await tab.count():
@@ -467,7 +486,7 @@ async def open_ticket_page(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             ),
-            locale="ru-RU",
+            locale=_BROWSER_LOCALE,
         )
         page = await context.new_page()
 
@@ -543,7 +562,7 @@ async def buy_ticket(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             ),
-            locale="ru-RU",
+            locale=_BROWSER_LOCALE,
         )
         page = await context.new_page()
 
