@@ -118,33 +118,73 @@ def init_db():
 
 
 # ── RAILWAY API ───────────────────────────────────────────────────────────────
+def _railway_error_detail(resp: httpx.Response) -> str:
+    """eticket.railway.uz javobidan foydalanuvchiga tushunarli qisqa matn."""
+    text = (resp.text or "").strip()
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, list) and err:
+            msg = err[0].get("message") if isinstance(err[0], dict) else None
+            if msg:
+                return str(msg)
+        if isinstance(data.get("message"), str):
+            return data["message"]
+    if text and len(text) < 400:
+        return text
+    return f"HTTP {resp.status_code}"
+
+
 async def fetch_trains(from_code: str, to_code: str, date: str) -> dict:
     import uuid
+
     payload = {
         "directions": {
             "forward": {
                 "date": date,
-                "depStationCode": from_code,
-                "arvStationCode": to_code,
+                "depStationCode": str(from_code).strip(),
+                "arvStationCode": str(to_code).strip(),
             }
         }
     }
-    # Double-submit cookie pattern: generate UUID, send as both Cookie and header
-    xsrf = str(uuid.uuid4())
-    headers = {
-        "User-Agent": RAILWAY_UA,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ru-RU,ru;q=0.9,uz;q=0.8",
-        "Content-Type": "application/json",
-        "Origin":  RAILWAY_BASE,
-        "Referer": RAILWAY_BASE + "/ru/home",
-        "Cookie": f"XSRF-TOKEN={xsrf}",
-        "X-XSRF-TOKEN": xsrf,
-    }
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        resp = await client.post(RAILWAY_API, json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+    last_resp: httpx.Response | None = None
+    # Angular SPA: X-Custom-Language + uz sahifa refereri (v3 handbook shuni kutadi).
+    langs = ("uz", "ru")
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+        for attempt in range(3):
+            xsrf = str(uuid.uuid4())
+            for lang in langs:
+                headers = {
+                    "User-Agent": RAILWAY_UA,
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "uz-UZ,uz;q=0.9,ru-RU,ru;q=0.8",
+                    "Content-Type": "application/json",
+                    "Origin": RAILWAY_BASE,
+                    "Referer": f"{RAILWAY_BASE}/{lang}/home",
+                    "Cookie": f"XSRF-TOKEN={xsrf}",
+                    "X-XSRF-TOKEN": xsrf,
+                    "X-Custom-Language": lang,
+                }
+                resp = await client.post(RAILWAY_API, json=payload, headers=headers)
+                last_resp = resp
+                if resp.status_code == 200:
+                    return resp.json()
+                # Keyingi til / qayta urinishdan oldin log
+                if attempt == 0 and lang == langs[0]:
+                    logger.warning(
+                        "Railway trains/list %s (%s): %s",
+                        resp.status_code,
+                        lang,
+                        (resp.text or "")[:300],
+                    )
+            await asyncio.sleep(0.6 * (attempt + 1))
+
+    assert last_resp is not None
+    last_resp.raise_for_status()
+    return last_resp.json()
 
 
 def subscription_train_number(sub: sqlite3.Row) -> str | None:
@@ -680,7 +720,13 @@ async def search_trains(req: TrainSearchRequest):
         data = await fetch_trains(req.from_code, req.to_code, req.date)
         return data
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail="Railway API xatosi")
+        upstream = _railway_error_detail(e.response)
+        detail = (
+            "Temir yo‘llar sayti javob bermadi yoki vaqtincha ishlamayapti. "
+            "Birozdan keyin «Qayta urinish» bosing. "
+            f"({upstream})"
+        )
+        raise HTTPException(status_code=502, detail=detail)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -538,8 +538,13 @@ async function doSearch() {
       body: JSON.stringify({ from_code: state.fromCode, to_code: state.toCode, date: state.date }),
     });
     renderResults(resp);
-  } catch {
-    showError("Serverga ulanishda xatolik. Internet aloqasini tekshiring.");
+  } catch (err) {
+    const m = err && err.message ? String(err.message).trim() : "";
+    if (m && m.length > 2) {
+      showError(m);
+    } else {
+      showError("Serverga ulanishda xatolik. Internet aloqasini tekshiring.");
+    }
   } finally {
     showLoading(false);
   }
