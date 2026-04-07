@@ -3,9 +3,11 @@ eticket.railway.uz — RAILWAY_LOGIN: telefon (9 yoki 998... raqam; formaga faqa
 RAILWAY_PASSWORD bilan avtomatik bron. Playwright: login → poyezdlar → sotib olish → to'lov.
 """
 
+import json
 import logging
 import os
 import re
+from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -45,6 +47,16 @@ def _trains_page_url(
     return f"{RAILWAY}/{lang}/pages/trains-page?{urlencode(pairs)}"
 
 
+def _iso_to_railway_dmy(date_iso: str) -> str:
+    """
+    Angular dateSelect: forwardDate = DD-MM-YYYY (chiziqlar).
+    sd-value (YYYY-MM-DD) + beautifyDate odatda kalendar "bugun"da qoladi.
+    """
+    raw = (date_iso or "").strip()[:10]
+    dt = datetime.strptime(raw, "%Y-%m-%d")
+    return dt.strftime("%d-%m-%Y")
+
+
 async def _open_trains_search(
     page,
     from_code: str,
@@ -54,69 +66,47 @@ async def _open_trains_search(
     date_iso: str,
 ) -> str:
     """
-    queryParams.subscribe ba'zin kech yoki URL qisqaradi — sessionStorage bo'sh qoladi.
-    Kutish + kerak bo'lsa sessionStorage va to'liq location.assign zaxirasi.
+    sessionStorage + savedData.forwardDate (DD-MM-YYYY) + redirectedFromHome — Angular ngOnInit
+    ichida update(), dateSelect(forwardDate), searchTrains() (faqat URL query yetarli emas edi: sana "bugun").
     """
     fn = (from_name or "").strip() or str(from_code)
     tn = (to_name or "").strip() or str(to_code)
-    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, date_iso, lang="ru")
-    arg = [date_iso, str(from_code), str(to_code)]
+    d_iso = (date_iso or "").strip()[:10]
+    dmy = _iso_to_railway_dmy(d_iso)
+    saved_payload = json.dumps({"forwardDate": dmy})
+    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, d_iso, lang="ru")
+    plain_trains = f"{RAILWAY}/ru/pages/trains-page"
+    arg = [d_iso, str(from_code), str(to_code)]
 
-    async def _storage_ok() -> bool:
-        return await page.evaluate(
-            """([d, fc, tc]) => {
-                const g = (k) => sessionStorage.getItem(k) || '';
-                return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
-            }""",
-            arg,
-        )
+    await page.evaluate(
+        """([d_iso, saved, fc, tc, fn, tn]) => {
+            sessionStorage.setItem('sd-value', d_iso);
+            sessionStorage.setItem('sd-value2', '');
+            sessionStorage.setItem('sf-code', String(fc));
+            sessionStorage.setItem('st-code', String(tc));
+            sessionStorage.setItem('sf-name', fn);
+            sessionStorage.setItem('st-name', tn);
+            sessionStorage.setItem('redirectedFromHome', 'true');
+            sessionStorage.setItem('savedData', saved);
+        }""",
+        [d_iso, saved_payload, str(from_code), str(to_code), fn, tn],
+    )
 
-    await page.goto(trains_url, wait_until=_WAIT, timeout=45000)
+    await page.goto(plain_trains, wait_until=_WAIT, timeout=45000)
+
     try:
         await page.wait_for_function(
-            """([d, fc, tc]) => {
+            """([d_iso, fc, tc]) => {
                 const g = (k) => sessionStorage.getItem(k) || '';
-                return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
+                return g('sd-value') === d_iso && g('sf-code') === String(fc) && g('st-code') === String(tc);
             }""",
             arg=arg,
             timeout=14000,
         )
     except PWTimeout:
-        logger.warning(
-            "[railway] trains: query dan keyin sessionStorage to'lmadi — assign zaxirasi. href=%s",
-            (await page.evaluate("() => location.href"))[:220],
-        )
-        await page.evaluate(
-            """([url, d, fc, tc, fn, tn]) => {
-                sessionStorage.setItem('sd-value', d);
-                sessionStorage.setItem('sd-value2', '');
-                sessionStorage.setItem('sf-code', String(fc));
-                sessionStorage.setItem('st-code', String(tc));
-                sessionStorage.setItem('sf-name', fn);
-                sessionStorage.setItem('st-name', tn);
-                window.location.assign(url);
-            }""",
-            [trains_url, date_iso, str(from_code), str(to_code), fn, tn],
-        )
-        await page.wait_for_load_state(_WAIT, timeout=45000)
-        try:
-            await page.wait_for_function(
-                """([d, fc, tc]) => {
-                    const g = (k) => sessionStorage.getItem(k) || '';
-                    return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
-                }""",
-                arg=arg,
-                timeout=16000,
-            )
-        except PWTimeout:
-            logger.error(
-                "[railway] trains: zaxiradan keyin ham sessionStorage noto'g'ri (sd=%r sf=%r st=%r)",
-                await page.evaluate("() => sessionStorage.getItem('sd-value')"),
-                await page.evaluate("() => sessionStorage.getItem('sf-code')"),
-                await page.evaluate("() => sessionStorage.getItem('st-code')"),
-            )
+        logger.warning("[railway] trains: sessionStorage (sd/sf/st) kutilmadi")
 
-    await page.wait_for_timeout(800)
+    await page.wait_for_timeout(2200)
     return trains_url
 
 # networkidle SPA da tez-tez osilib qoladi — asosan domcontentloaded
