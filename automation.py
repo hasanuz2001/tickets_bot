@@ -57,6 +57,20 @@ def _phone_local_digits_for_masked_input(full998: str) -> str:
     return full998[-9:] if len(full998) >= 9 else full998
 
 
+async def _type_phone_imask(page, login_el, nine_digits: str) -> None:
+    """
+    IMask maydonida .fill() yoki juda tez sequential ba'zan bitta raqamni yutadi
+    (masalan 939578080 → 93 dan keyingi 9 chiqmaydi). Tanlash + sekin type yaxshiroq.
+    """
+    await login_el.click(timeout=5000)
+    await page.wait_for_timeout(200)
+    # Playwright Mac da Control+a → Meta+a ga map qilinadi
+    await login_el.press("Control+a")
+    await page.wait_for_timeout(100)
+    await page.keyboard.type(nine_digits, delay=120)
+    await page.wait_for_timeout(200)
+
+
 def _browser_args() -> list[str]:
     return [
         "--no-sandbox",
@@ -144,13 +158,7 @@ async def _login_railway(page) -> tuple[bool, str]:
                 ).first
             if not await login_el.count():
                 login_el = page.locator("form input[type='text']").first
-            await login_el.click(timeout=5000)
-            await login_el.fill("", timeout=2000)
-            try:
-                await login_el.fill(phone_to_type, timeout=12000)
-            except Exception:
-                await login_el.press_sequentially(phone_to_type, delay=50)
-            await page.wait_for_timeout(400)
+            await _type_phone_imask(page, login_el, phone_to_type)
 
         await page.locator("input[type='password']").first.fill(RAILWAY_PASS, timeout=8000)
 
