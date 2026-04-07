@@ -1,8 +1,12 @@
 #!/bin/bash
 # Loyiha sozlamalarini qilish
-# Ishlatish (loyiha /opt/app da bo'lsa):
+#
+# server.py / bot.py qaysi papkada bo'lsa, o'sha ildiz (masalan /opt/app).
+# GitHub repo nomi "tickets_bot" bo'lishi mumkin — serverda qo'shimcha tickets_bot/ papkasi shart emas.
+#
+# Ishlatish:
 #   cd /opt/app && bash deploy/configure.sh
-# Boshqa papka: export TICKETS_BOT_HOME=/opt/boshqa && bash deploy/configure.sh
+# Boshqa ildiz: export TICKETS_BOT_HOME=/opt/boshqa && bash deploy/configure.sh
 
 set -e
 APP_DIR="${TICKETS_BOT_HOME:-/opt/app}"

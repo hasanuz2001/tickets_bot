@@ -12,7 +12,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Nginx + SSL: $DOMAIN"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Nginx konfiguratsiya
+# Nginx sayt fayli nomi (loyiha papkasi bilan bog'liq emas)
 cat > /etc/nginx/sites-available/tickets_bot << EOF
 server {
     listen 80;

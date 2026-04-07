@@ -2,7 +2,7 @@
 # systemd servislarni yaratish va ishga tushirish
 # Ishlatish: cd /opt/app && bash deploy/services.sh
 # Boshqa papka: export TICKETS_BOT_HOME=/opt/boshqa
-# Monorepo: server.py tickets_bot/ ichida bo'lsa — TICKETS_BOT_HOME=/opt/app/tickets_bot
+# Ayrim monorepolarda server.py pastki papkada bo'lsa: TICKETS_BOT_HOME=/opt/app/ostidagi_papka
 
 set -e
 APP_DIR="${TICKETS_BOT_HOME:-/opt/app}"
