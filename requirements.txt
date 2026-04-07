@@ -5,4 +5,5 @@ uvicorn[standard]==0.30.6
 apscheduler==3.10.4
 python-multipart==0.0.9
 python-dotenv==1.0.1
-playwright==1.44.0
+# Ubuntu 24.04 (Noble) t64 / libasound2 — 1.45+ talab
+playwright>=1.49.0,<1.57
