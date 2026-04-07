@@ -68,11 +68,62 @@ def _iso_to_railway_dotted(date_iso: str) -> str:
     return dt.strftime("%d.%m.%Y")
 
 
+async def _dismiss_railway_overlays(page) -> None:
+    """
+    'Chiptaning haqiqiyligini tekshiring' va boshqa overlaylar sana/Izlash ustiga chiqadi.
+    """
+    for _ in range(2):
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(350)
+    for sel in (
+        ".cdk-overlay-backdrop",
+        ".modal-backdrop",
+        "[class*='backdrop']",
+    ):
+        bd = page.locator(sel).first
+        try:
+            if await bd.count() and await bd.is_visible():
+                await bd.click(timeout=1500, force=True)
+                await page.wait_for_timeout(300)
+        except Exception:
+            pass
+    for txt in (
+        "Yopish",
+        "Orqaga",
+        "Bekor",
+        "Bekor qilish",
+        "Закрыть",
+        "×",
+    ):
+        btn = page.get_by_role("button", name=re.compile(re.escape(txt), re.I)).first
+        try:
+            if await btn.count() and await btn.is_visible():
+                await btn.click(timeout=2000)
+                await page.wait_for_timeout(300)
+        except Exception:
+            pass
+    for sel in (
+        "button.mat-mdc-dialog-close",
+        "[mat-dialog-close]",
+        "[class*='dialog'] button[class*='close' i]",
+        "button[aria-label='Close']",
+    ):
+        el = page.locator(sel).first
+        try:
+            if await el.count() and await el.is_visible():
+                await el.click(timeout=2000)
+                await page.wait_for_timeout(300)
+        except Exception:
+            pass
+
+
 async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     """
     redirectedFromHome + dateSelect ba'zan ngOnInitda (ViewChild) ishlamaydi — sana bugun qoladi.
-    Qidiruv panelidagi maskali sana maydoniga DD.MM.YYYY yozib, Izlash/Найти bosiladi.
+    Overlay yopiladi; sana maskasi DD.MM.YYYY; Izlash faqat qidiruv paneli ichidan.
     """
+    await _dismiss_railway_overlays(page)
+
     dotted = _iso_to_railway_dotted(date_iso)
     bar = page.locator("[class*='search-trains']").first
     if not await bar.count():
@@ -90,7 +141,7 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         except Exception:
             continue
         if re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val) or re.search(
-            r"\d{1,2}\s+[A-Za-zА-Яа-я]", val
+            r"\d{1,2}\s+[A-Za-zА-Яа-яЁё]", val
         ):
             target = el
             break
@@ -103,10 +154,21 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         elif cnt >= 1:
             target = inputs.nth(cnt - 1)
         else:
-            logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s)", cnt)
-            return
+            fields = bar.locator("[class*='form__field'], [class*='field']").filter(has=page.locator("input"))
+            fc = await fields.count()
+            if fc >= 3:
+                try:
+                    await fields.nth(2).locator("input").first.click(timeout=5000)
+                    target = fields.nth(2).locator("input").first
+                except Exception:
+                    logger.warning("[railway] sana form__field orqali ochilmadi")
+                    return
+            else:
+                logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s)", cnt)
+                return
 
     try:
+        await target.scroll_into_view_if_needed()
         await target.click(timeout=8000)
         await target.press("Control+a")
         await page.wait_for_timeout(120)
@@ -116,18 +178,20 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         logger.warning("[railway] sana yozishda xato: %s", e)
         return
 
-    search_btn = page.get_by_role(
-        "button",
-        name=re.compile(r"Izlash|IZLASH|Qidirish|Найти", re.I),
+    await _dismiss_railway_overlays(page)
+
+    search_btn = bar.locator("button").filter(
+        has_text=re.compile(r"Izlash|Qidirish|Найти", re.I)
     ).first
     if await search_btn.count():
         try:
+            await search_btn.scroll_into_view_if_needed()
             await search_btn.click(timeout=6000)
             await page.wait_for_timeout(2800)
             return
         except Exception:
             pass
-    legacy = page.locator(
+    legacy = bar.locator(
         "button:has-text('Izlash'), button:has-text('Найти'), button:has-text('Qidirish')"
     ).first
     if await legacy.count():
@@ -184,6 +248,7 @@ async def _open_trains_search(
     )
 
     await page.goto(plain_trains, wait_until=_WAIT, timeout=45000)
+    await _dismiss_railway_overlays(page)
 
     try:
         await page.wait_for_function(
