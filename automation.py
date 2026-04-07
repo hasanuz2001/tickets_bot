@@ -687,8 +687,11 @@ async def open_ticket_page(
 
             clicked = False
             try:
+                # [class*='train'] — search-trains bilan chalkashadi (darhol "topiladi")
                 await page.wait_for_selector(
-                    "[class*='train'], [class*='Train'], .result-card, article",
+                    "[class*='train']:not([class*='search-trains']), "
+                    "[class*='Train']:not([class*='search-trains']), "
+                    ".result-card",
                     timeout=20000,
                 )
                 clicked = await _click_buy_for_train(page, train_number)
@@ -764,9 +767,12 @@ async def buy_ticket(
             logger.info("[buy_ticket] Trains: %s", trains_url)
 
             await page.wait_for_selector(
-                "[class*='train'], [class*='Train'], .result-card, article",
+                "[class*='train']:not([class*='search-trains']), "
+                "[class*='Train']:not([class*='search-trains']), "
+                ".result-card",
                 timeout=25000,
             )
+            logger.info("[buy_ticket] poyezdlar ro'yxati DOMda paydo bo'ldi (yoki shunga o'xshash element)")
 
             if not await _click_buy_for_train(page, train_number):
                 scr = await page.screenshot(full_page=True)
