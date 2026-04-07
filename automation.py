@@ -441,7 +441,6 @@ async def _open_trains_search(
     )
     lang = RAILWAY_UI_LANG
     trains_url = _trains_page_url(from_code, to_code, from_name, to_name, d_iso, lang=lang)
-    plain_trains = f"{RAILWAY}/{lang}/pages/trains-page"
     arg = [d_iso, str(from_code), str(to_code)]
 
     await page.evaluate(
@@ -459,13 +458,14 @@ async def _open_trains_search(
     )
 
     logger.info(
-        "[railway] trains ochish: date_iso=%s %s→%s plain=%s",
+        "[railway] trains ochish: date_iso=%s %s→%s url=%s",
         d_iso,
         from_code,
         to_code,
-        plain_trains,
+        trains_url[:120],
     )
-    await page.goto(plain_trains, wait_until=_WAIT, timeout=45000)
+    # To'liq query (sd-value, sf-code, ...) — faqat plain /trains-page ba'zan UI "bugun"da qoladi
+    await page.goto(trains_url, wait_until=_WAIT, timeout=45000)
     await _dismiss_railway_overlays(page)
     try:
         href = await page.evaluate("() => location.href")
@@ -668,20 +668,58 @@ async def _login_railway(page) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _train_number_match_variants(raw: str) -> list[str]:
+    """765Ф / 765 Ф / 765F / 765 — sayt turlicha ko'rsatadi."""
+    t = str(raw).strip()
+    if not t:
+        return []
+    out: list[str] = []
+    for v in (
+        t,
+        t.replace("F", "Ф").replace("f", "ф"),
+        t.replace("Ф", "F").replace("ф", "f"),
+        re.sub(r"\s+", "", t),
+        re.sub(r"\s+", "", t).replace("F", "Ф").replace("f", "ф"),
+    ):
+        if v and v not in out:
+            out.append(v)
+    digits = re.sub(r"\D", "", t)
+    if len(digits) >= 2 and digits not in out:
+        out.append(digits)
+    return out
+
+
 async def _click_buy_for_train(page, train_number: str) -> bool:
     """Tanlangan poyezd qatoridagi sotib olish tugmasi (RU/UZ)."""
     tnum = str(train_number).strip()
     if not tnum:
         return False
 
-    marker = page.locator(f"text=№{tnum}").first
-    if not await marker.count():
-        marker = page.get_by_text(re.compile(rf"№\s*{re.escape(tnum)}\b")).first
-    if not await marker.count():
-        marker = page.locator(f"text={tnum}").first
+    variants = _train_number_match_variants(tnum)
+    marker = None
+    for cand in variants:
+        cands = [
+            page.locator(f"text=№{cand}").first,
+            page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}", re.I)).first,
+            page.get_by_text(re.compile(rf"№\s*{re.escape(cand)}\b", re.I)).first,
+        ]
+        digits = re.sub(r"\D", "", cand)
+        if len(digits) >= 2 and cand == digits:
+            cands.append(
+                page.get_by_text(re.compile(rf"№\s*{re.escape(digits)}\s*[ФFf]?", re.I)).first
+            )
+        for loc in cands:
+            try:
+                if await loc.count():
+                    marker = loc
+                    break
+            except Exception:
+                continue
+        if marker:
+            break
 
-    if not await marker.count():
-        logger.warning("[buy] Poyezd №%s topilmadi", tnum)
+    if not marker or not await marker.count():
+        logger.warning("[buy] Poyezd №%s topilmadi (qidiruv: %s)", tnum, variants[:6])
         return False
 
     await marker.scroll_into_view_if_needed()
