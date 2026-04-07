@@ -21,14 +21,15 @@ apt install -y \
   libpango-1.0-0 libcairo2 libasound2 libdrm2 libxkbcommon0 || true
 
 # --- 3. Papka yaratish ---
-mkdir -p /opt/tickets_bot
-cd /opt/tickets_bot
+APP_ROOT="${TICKETS_BOT_HOME:-/opt/app}"
+mkdir -p "$APP_ROOT"
+cd "$APP_ROOT"
 
 echo ""
 echo "✅ Tizim paketlari o'rnatildi"
 echo ""
-echo "Endi loyihani ko'chiring:"
-echo "  scp -r tickets_bot/ root@SERVER_IP:/opt/"
+echo "Endi loyihani ko'chiring (masalan monorepo bo'lsa /opt/app ichiga):"
+echo "  rsync ... root@SERVER_IP:$APP_ROOT/"
 echo ""
 echo "Keyin davom eting:"
-echo "  bash /opt/tickets_bot/deploy/configure.sh"
+echo "  cd $APP_ROOT && bash deploy/configure.sh"

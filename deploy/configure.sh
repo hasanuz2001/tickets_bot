@@ -1,9 +1,11 @@
 #!/bin/bash
 # Loyiha sozlamalarini qilish
-# Ishlatish: bash /opt/tickets_bot/deploy/configure.sh
+# Ishlatish (loyiha /opt/app da bo'lsa):
+#   cd /opt/app && bash deploy/configure.sh
+# Boshqa papka: export TICKETS_BOT_HOME=/opt/boshqa && bash deploy/configure.sh
 
 set -e
-APP_DIR="/opt/tickets_bot"
+APP_DIR="${TICKETS_BOT_HOME:-/opt/app}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Configure: Python env + .env"
@@ -60,4 +62,4 @@ echo ""
 echo "✅ Konfiguratsiya tayyor"
 echo "📱 Telegram Mini App (iPhone): @BotFather → bot → Mini App / URL sozlamalari —"
 echo "   WEBAPP_URL hostname (${DOMAIN:-domen}) ro'yxatdan o'tgan bo'lishi kerak."
-echo "Davom eting: bash /opt/tickets_bot/deploy/nginx.sh"
+echo "Davom eting: bash $APP_DIR/deploy/nginx.sh"

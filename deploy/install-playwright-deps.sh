@@ -1,10 +1,11 @@
 #!/bin/bash
 # Playwright Chromium uchun tizim kutubxonalari (Ubuntu/Debian).
 # MUHIM: root bilan ishga tushiring.
-#   sudo bash /opt/tickets_bot/deploy/install-playwright-deps.sh
+#   cd /opt/app && sudo bash deploy/install-playwright-deps.sh
+# Boshqa papka: sudo bash deploy/install-playwright-deps.sh /opt/boshqa
 #
 set -e
-APP_DIR="${1:-/opt/tickets_bot}"
+APP_DIR="${1:-${TICKETS_BOT_HOME:-/opt/app}}"
 PW="$APP_DIR/venv/bin/playwright"
 
 if [ "$(id -u)" -ne 0 ]; then

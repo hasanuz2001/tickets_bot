@@ -1,9 +1,11 @@
 #!/bin/bash
 # systemd servislarni yaratish va ishga tushirish
-# Ishlatish: bash /opt/tickets_bot/deploy/services.sh
+# Ishlatish: cd /opt/app && bash deploy/services.sh
+# Boshqa papka: export TICKETS_BOT_HOME=/opt/boshqa
+# Monorepo: server.py tickets_bot/ ichida bo'lsa — TICKETS_BOT_HOME=/opt/app/tickets_bot
 
 set -e
-APP_DIR="/opt/tickets_bot"
+APP_DIR="${TICKETS_BOT_HOME:-/opt/app}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  systemd services"

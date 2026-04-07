@@ -1,8 +1,9 @@
 #!/bin/bash
 # Nginx + SSL sozlash
-# Ishlatish: bash /opt/tickets_bot/deploy/nginx.sh
+# Ishlatish: cd /opt/app && bash deploy/nginx.sh
 
 set -e
+APP_ROOT="${TICKETS_BOT_HOME:-/opt/app}"
 
 DOMAIN=$(cat /tmp/bot_domain.txt)
 EMAIL="admin@$DOMAIN"
@@ -44,4 +45,4 @@ certbot --nginx -d $DOMAIN --non-interactive --agree-tos -m $EMAIL
 
 echo ""
 echo "✅ SSL sertifikat o'rnatildi"
-echo "Davom eting: bash /opt/tickets_bot/deploy/services.sh"
+echo "Davom eting: bash $APP_ROOT/deploy/services.sh"
