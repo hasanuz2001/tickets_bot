@@ -122,17 +122,23 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     redirectedFromHome + dateSelect ba'zan ngOnInitda (ViewChild) ishlamaydi — sana bugun qoladi.
     Overlay yopiladi; sana maskasi DD.MM.YYYY; Izlash faqat qidiruv paneli ichidan.
     """
+    logger.info("[railway] sana qadam: date_iso=%s", (date_iso or "")[:10])
     await _dismiss_railway_overlays(page)
 
     dotted = _iso_to_railway_dotted(date_iso)
     bar = page.locator("[class*='search-trains']").first
     if not await bar.count():
-        logger.warning("[railway] search-trains konteyner topilmadi — sana qo'lda yozilmadi")
+        logger.warning(
+            "[railway] search-trains konteyner topilmadi — sana yozilmaydi (BETA boshqa class?). URL=%s",
+            (await page.evaluate("() => location.href"))[:200],
+        )
         return
 
     inputs = bar.locator("input:visible")
     cnt = await inputs.count()
+    logger.info("[railway] search-trains ichida input:visible soni=%s", cnt)
     target = None
+    pick_reason = ""
     for i in range(cnt):
         el = inputs.nth(i)
         try:
@@ -144,15 +150,19 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             r"\d{1,2}\s+[A-Za-zА-Яа-яЁё]", val
         ):
             target = el
+            pick_reason = f"pattern idx={i} val={val!r}"
             break
         if any(x in ph.lower() for x in ("dd", "kun", "sana", "date", "гггг", "yyyy")):
             target = el
+            pick_reason = f"placeholder idx={i} ph={ph!r}"
             break
     if target is None:
         if cnt >= 3:
             target = inputs.nth(2)
+            pick_reason = "fallback nth(2)"
         elif cnt >= 1:
             target = inputs.nth(cnt - 1)
+            pick_reason = f"fallback last idx={cnt - 1}"
         else:
             fields = bar.locator("[class*='form__field'], [class*='field']").filter(has=page.locator("input"))
             fc = await fields.count()
@@ -160,12 +170,15 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
                 try:
                     await fields.nth(2).locator("input").first.click(timeout=5000)
                     target = fields.nth(2).locator("input").first
+                    pick_reason = "form__field nth(2)"
                 except Exception:
                     logger.warning("[railway] sana form__field orqali ochilmadi")
                     return
             else:
-                logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s)", cnt)
+                logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s fields=%s)", cnt, fc)
                 return
+
+    logger.info("[railway] sana maydoni: %s; type=%s", pick_reason, dotted)
 
     try:
         await target.scroll_into_view_if_needed()
@@ -174,6 +187,11 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         await page.wait_for_timeout(120)
         await page.keyboard.type(dotted, delay=95)
         await page.wait_for_timeout(350)
+        try:
+            after = await target.input_value()
+            logger.info("[railway] sana input dan keyin: %r", after[:120])
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("[railway] sana yozishda xato: %s", e)
         return
@@ -187,19 +205,23 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         try:
             await search_btn.scroll_into_view_if_needed()
             await search_btn.click(timeout=6000)
+            logger.info("[railway] Izlash bosildi (search-trains paneli)")
             await page.wait_for_timeout(2800)
             return
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.warning("[railway] Izlash bosishda xato: %s", ex)
     legacy = bar.locator(
         "button:has-text('Izlash'), button:has-text('Найти'), button:has-text('Qidirish')"
     ).first
     if await legacy.count():
         try:
             await legacy.click(timeout=6000)
+            logger.info("[railway] Izlash bosildi (legacy selector)")
             await page.wait_for_timeout(2800)
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.warning("[railway] legacy Izlash: %s", ex)
+    else:
+        logger.warning("[railway] Izlash tugmasi search-trains ichida topilmadi")
 
 
 async def _open_trains_search(
@@ -247,8 +269,29 @@ async def _open_trains_search(
         [d_iso, saved_payload, str(from_code), str(to_code), fn, tn],
     )
 
+    logger.info(
+        "[railway] trains ochish: date_iso=%s %s→%s plain=%s",
+        d_iso,
+        from_code,
+        to_code,
+        plain_trains,
+    )
     await page.goto(plain_trains, wait_until=_WAIT, timeout=45000)
     await _dismiss_railway_overlays(page)
+    try:
+        href = await page.evaluate("() => location.href")
+        snap = await page.evaluate(
+            """() => ({
+                sd: sessionStorage.getItem('sd-value'),
+                sf: sessionStorage.getItem('sf-code'),
+                st: sessionStorage.getItem('st-code'),
+                redir: sessionStorage.getItem('redirectedFromHome'),
+                saved: (sessionStorage.getItem('savedData') || '').slice(0, 120),
+            })"""
+        )
+        logger.info("[railway] keyin URL=%s sessionStorage=%s", href[:180], snap)
+    except Exception as e:
+        logger.warning("[railway] URL/sessionStorage log: %s", e)
 
     try:
         await page.wait_for_function(
