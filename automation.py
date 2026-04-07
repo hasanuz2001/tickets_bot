@@ -27,11 +27,12 @@ def _trains_page_url(
     from_name: str,
     to_name: str,
     date_iso: str,
-    lang: str = "uz",
+    lang: str = "ru",
 ) -> str:
     """
     SPA depCode/arvCode ni URL dan o'qimaydi. Query: sd-value (YYYY-MM-DD), sf-code/st-code,
     sf-name/st-name; sd-value2 bo'sh — faqat yo'nalish.
+    Default lang=ru — login /ru/auth/login bilan bir xil domen yo'li, ba'zan /uz bilan query yo'qoladi.
     """
     pairs = [
         ("sd-value", date_iso),
@@ -42,6 +43,81 @@ def _trains_page_url(
         ("st-name", (to_name or "").strip() or str(to_code)),
     ]
     return f"{RAILWAY}/{lang}/pages/trains-page?{urlencode(pairs)}"
+
+
+async def _open_trains_search(
+    page,
+    from_code: str,
+    to_code: str,
+    from_name: str,
+    to_name: str,
+    date_iso: str,
+) -> str:
+    """
+    queryParams.subscribe ba'zin kech yoki URL qisqaradi — sessionStorage bo'sh qoladi.
+    Kutish + kerak bo'lsa sessionStorage va to'liq location.assign zaxirasi.
+    """
+    fn = (from_name or "").strip() or str(from_code)
+    tn = (to_name or "").strip() or str(to_code)
+    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, date_iso, lang="ru")
+    arg = [date_iso, str(from_code), str(to_code)]
+
+    async def _storage_ok() -> bool:
+        return await page.evaluate(
+            """([d, fc, tc]) => {
+                const g = (k) => sessionStorage.getItem(k) || '';
+                return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
+            }""",
+            arg,
+        )
+
+    await page.goto(trains_url, wait_until=_WAIT, timeout=45000)
+    try:
+        await page.wait_for_function(
+            """([d, fc, tc]) => {
+                const g = (k) => sessionStorage.getItem(k) || '';
+                return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
+            }""",
+            arg=arg,
+            timeout=14000,
+        )
+    except PWTimeout:
+        logger.warning(
+            "[railway] trains: query dan keyin sessionStorage to'lmadi — assign zaxirasi. href=%s",
+            (await page.evaluate("() => location.href"))[:220],
+        )
+        await page.evaluate(
+            """([url, d, fc, tc, fn, tn]) => {
+                sessionStorage.setItem('sd-value', d);
+                sessionStorage.setItem('sd-value2', '');
+                sessionStorage.setItem('sf-code', String(fc));
+                sessionStorage.setItem('st-code', String(tc));
+                sessionStorage.setItem('sf-name', fn);
+                sessionStorage.setItem('st-name', tn);
+                window.location.assign(url);
+            }""",
+            [trains_url, date_iso, str(from_code), str(to_code), fn, tn],
+        )
+        await page.wait_for_load_state(_WAIT, timeout=45000)
+        try:
+            await page.wait_for_function(
+                """([d, fc, tc]) => {
+                    const g = (k) => sessionStorage.getItem(k) || '';
+                    return g('sd-value') === d && g('sf-code') === String(fc) && g('st-code') === String(tc);
+                }""",
+                arg=arg,
+                timeout=16000,
+            )
+        except PWTimeout:
+            logger.error(
+                "[railway] trains: zaxiradan keyin ham sessionStorage noto'g'ri (sd=%r sf=%r st=%r)",
+                await page.evaluate("() => sessionStorage.getItem('sd-value')"),
+                await page.evaluate("() => sessionStorage.getItem('sf-code')"),
+                await page.evaluate("() => sessionStorage.getItem('st-code')"),
+            )
+
+    await page.wait_for_timeout(800)
+    return trains_url
 
 # networkidle SPA da tez-tez osilib qoladi — asosan domcontentloaded
 _WAIT = "domcontentloaded"
@@ -412,8 +488,7 @@ async def open_ticket_page(
                 await browser.close()
                 return {"success": False, "screenshot": scr, "url": page.url, "message": msg}
 
-            await page.goto(trains_url, wait_until=_WAIT, timeout=35000)
-            await page.wait_for_timeout(2000)
+            await _open_trains_search(page, from_code, to_code, from_name, to_name, date)
 
             clicked = False
             try:
@@ -488,9 +563,10 @@ async def buy_ticket(
                 scr = await page.screenshot(full_page=True)
                 return {"status": "error", "message": msg, "screenshot": scr}
 
+            trains_url = await _open_trains_search(
+                page, from_code, to_code, from_name, to_name, date
+            )
             logger.info("[buy_ticket] Trains: %s", trains_url)
-            await page.goto(trains_url, wait_until=_WAIT, timeout=35000)
-            await page.wait_for_timeout(2200)
 
             await page.wait_for_selector(
                 "[class*='train'], [class*='Train'], .result-card, article",
