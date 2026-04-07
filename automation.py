@@ -1,5 +1,5 @@
 """
-eticket.railway.uz — RAILWAY_LOGIN: telefon (998... yoki 9 raqam) yoki email (@).
+eticket.railway.uz — RAILWAY_LOGIN: telefon (9 yoki 998... raqam; formaga faqat 9 ta yoziladi) yoki email (@).
 RAILWAY_PASSWORD bilan avtomatik bron. Playwright: login → poyezdlar → sotib olish → to'lov.
 """
 
@@ -30,7 +30,7 @@ def _login_is_email(login: str) -> bool:
 
 def _normalize_uz_phone(login: str) -> str:
     """
-    Maskali maydonga: faqat raqamlar, 998 bilan 12 ta (masalan 998901234567).
+    Validatsiya: faqat raqamlar, 998 bilan 12 ta (masalan 998901234567).
     """
     digits = re.sub(r"\D", "", login or "")
     if not digits:
@@ -42,6 +42,19 @@ def _normalize_uz_phone(login: str) -> str:
     if len(digits) == 12 and digits.startswith("998"):
         return digits
     return digits
+
+
+def _phone_local_digits_for_masked_input(full998: str) -> str:
+    """
+    eticket.railway.uz maydonida +998 (__) allaqachon turadi — 12 raqam yozilsa
+    mask 998 ni qayta "yutib", raqam siljiydi (masalan 93 o'rniga 98 chiqadi).
+    Shuning uchun faqat mahalliy 9 ta raqam beramiz.
+    """
+    if len(full998) >= 12 and full998.startswith("998"):
+        return full998[3:12]
+    if len(full998) == 9:
+        return full998
+    return full998[-9:] if len(full998) >= 9 else full998
 
 
 def _browser_args() -> list[str]:
@@ -115,12 +128,14 @@ async def _login_railway(page) -> tuple[bool, str]:
                 login_el = page.locator("form input[type='text']").first
             await login_el.fill(RAILWAY_LOGIN.strip(), timeout=12000)
         else:
-            phone_digits = _normalize_uz_phone(RAILWAY_LOGIN)
-            if not phone_digits or len(phone_digits) < 12:
+            phone_full = _normalize_uz_phone(RAILWAY_LOGIN)
+            if not phone_full or len(phone_full) < 12:
                 return (
                     False,
                     "Telefon noto'g'ri: RAILWAY_LOGIN da 9 yoki 12 raqam (998...) kiriting.",
                 )
+            # Maydonda +998 prefiks bo'lgani uchun 9 ta mahalliy raqam (masalan 939578080)
+            phone_to_type = _phone_local_digits_for_masked_input(phone_full)
             login_el = page.locator("input[type='tel']").first
             if not await login_el.count():
                 login_el = page.locator(
@@ -132,9 +147,9 @@ async def _login_railway(page) -> tuple[bool, str]:
             await login_el.click(timeout=5000)
             await login_el.fill("", timeout=2000)
             try:
-                await login_el.fill(phone_digits, timeout=12000)
+                await login_el.fill(phone_to_type, timeout=12000)
             except Exception:
-                await login_el.press_sequentially(phone_digits, delay=50)
+                await login_el.press_sequentially(phone_to_type, delay=50)
             await page.wait_for_timeout(400)
 
         await page.locator("input[type='password']").first.fill(RAILWAY_PASS, timeout=8000)
