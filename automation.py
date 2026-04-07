@@ -117,10 +117,57 @@ async def _dismiss_railway_overlays(page) -> None:
             pass
 
 
+async def _fill_date_via_calendar_trigger(page, bar, dotted: str) -> bool:
+    """
+    BETA: sana ko'rinmas — faqat '07 Aprel' matni. Bosiladi, popup inputga DD.MM.YYYY.
+    """
+    months_re = (
+        r"Yanvar|Fevral|Mart|Aprel|May|Iyun|Iyul|Avgust|Sentyabr|Oktyabr|Noyabr|Dekabr|"
+        r"yanvar|fevral|mart|aprel|may|iyun|iyul|avgust|sentyabr|oktyabr|noyabr|dekabr|"
+        r"январ|феврал|март|апрел|мая|июн|июл|август|сентябр|октябр|ноябр|декабр"
+    )
+    trigger = bar.get_by_text(re.compile(rf"\d{{1,2}}\s+({months_re})", re.I)).first
+    if not await trigger.count():
+        return False
+    try:
+        await trigger.scroll_into_view_if_needed()
+        await trigger.click(timeout=6000)
+    except Exception as e:
+        logger.warning("[railway] sana matnini bosishda xato: %s", e)
+        return False
+    await page.wait_for_timeout(550)
+    for sel in (
+        "bs-datepicker-container input",
+        ".bs-datepicker-container input",
+        "[class*='datepicker'] input",
+        ".dropdown-menu.show input",
+    ):
+        loc = page.locator(sel).first
+        if not await loc.count():
+            continue
+        try:
+            await loc.fill(dotted, timeout=5000, force=True)
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(400)
+            logger.info("[railway] kalendar popup: %s", sel)
+            return True
+        except Exception:
+            continue
+    try:
+        await page.keyboard.press("Control+a")
+        await page.keyboard.type(dotted, delay=90)
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(400)
+        logger.info("[railway] kalendar ochilgach klaviatura bilan sana")
+        return True
+    except Exception:
+        return False
+
+
 async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     """
     redirectedFromHome + dateSelect ba'zan ngOnInitda (ViewChild) ishlamaydi — sana bugun qoladi.
-    Overlay yopiladi; sana maskasi DD.MM.YYYY; Izlash faqat qidiruv paneli ichidan.
+    Sana ko'pincha 3-yashirin input yoki '07 Aprel' kalendar matni (2 ta stansiya inputida emas!).
     """
     logger.info("[railway] sana qadam: date_iso=%s", (date_iso or "")[:10])
     await _dismiss_railway_overlays(page)
@@ -134,67 +181,120 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         )
         return
 
-    inputs = bar.locator("input:visible")
-    cnt = await inputs.count()
-    logger.info("[railway] search-trains ichida input:visible soni=%s", cnt)
+    all_inp = bar.locator("input")
+    n_all = await all_inp.count()
+    vis = bar.locator("input:visible")
+    cnt_vis = await vis.count()
+    logger.info("[railway] input jami=%s, :visible=%s", n_all, cnt_vis)
+
     target = None
     pick_reason = ""
-    for i in range(cnt):
-        el = inputs.nth(i)
+
+    # 1) Uchunchi input — ko'pincha sana (yashirin bo'lsa ham force fill)
+    if n_all >= 3:
         try:
-            val = await el.input_value()
-            ph = (await el.get_attribute("placeholder")) or ""
-        except Exception:
-            continue
-        if re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val) or re.search(
-            r"\d{1,2}\s+[A-Za-zА-Яа-яЁё]", val
-        ):
-            target = el
-            pick_reason = f"pattern idx={i} val={val!r}"
-            break
-        if any(x in ph.lower() for x in ("dd", "kun", "sana", "date", "гггг", "yyyy")):
-            target = el
-            pick_reason = f"placeholder idx={i} ph={ph!r}"
-            break
+            cand = all_inp.nth(2)
+            await cand.scroll_into_view_if_needed()
+            await cand.fill(dotted, timeout=8000, force=True)
+            target = cand
+            pick_reason = "input[2] force fill (jami>=3)"
+        except Exception as e:
+            logger.warning("[railway] input[2] force fill ishlamadi: %s", e)
+
+    # 2) name/id/placeholder bo'yicha sana inputi
     if target is None:
-        if cnt >= 3:
-            target = inputs.nth(2)
-            pick_reason = "fallback nth(2)"
-        elif cnt >= 1:
-            target = inputs.nth(cnt - 1)
-            pick_reason = f"fallback last idx={cnt - 1}"
-        else:
-            fields = bar.locator("[class*='form__field'], [class*='field']").filter(has=page.locator("input"))
-            fc = await fields.count()
-            if fc >= 3:
+        for i in range(n_all):
+            el = all_inp.nth(i)
+            try:
+                blob = " ".join(
+                    filter(
+                        None,
+                        [
+                            await el.get_attribute("type"),
+                            await el.get_attribute("name"),
+                            await el.get_attribute("id"),
+                            await el.get_attribute("placeholder"),
+                            await el.get_attribute("formcontrolname"),
+                        ],
+                    )
+                ).lower()
+            except Exception:
+                continue
+            if not blob:
+                continue
+            if any(
+                x in blob.replace(" ", "")
+                for x in ("date", "forward", "sana", "departure", "calendar")
+            ):
                 try:
-                    await fields.nth(2).locator("input").first.click(timeout=5000)
-                    target = fields.nth(2).locator("input").first
-                    pick_reason = "form__field nth(2)"
+                    await el.fill(dotted, timeout=6000, force=True)
+                    target = el
+                    pick_reason = f"attr idx={i} blob={blob[:80]!r}"
+                    break
                 except Exception:
-                    logger.warning("[railway] sana form__field orqali ochilmadi")
-                    return
-            else:
-                logger.warning("[railway] sana inputi aniqlanmadi (cnt=%s fields=%s)", cnt, fc)
-                return
+                    continue
 
-    logger.info("[railway] sana maydoni: %s; type=%s", pick_reason, dotted)
+    # 3) Faqat ko'rinadiganlar: naqsh yoki 3+ bo'lsa nth(2) — lekin 2 ta bo'lsa oxirgisini SANAMASLIK
+    if target is None:
+        for i in range(cnt_vis):
+            el = vis.nth(i)
+            try:
+                val = await el.input_value()
+                ph = (await el.get_attribute("placeholder")) or ""
+            except Exception:
+                continue
+            if re.search(r"\d{1,2}\.\d{1,2}\.\d{2,4}", val) or re.search(
+                r"\d{1,2}\s+[A-Za-zА-Яа-яЁё]", val
+            ):
+                target = el
+                pick_reason = f"visible pattern idx={i}"
+                break
+            if any(x in ph.lower() for x in ("dd", "kun", "sana", "date", "гггг", "yyyy")):
+                target = el
+                pick_reason = f"visible placeholder idx={i}"
+                break
+        if target is None and cnt_vis >= 3:
+            try:
+                cand = vis.nth(2)
+                await cand.click(timeout=5000)
+                await cand.press("Control+a")
+                await page.keyboard.type(dotted, delay=95)
+                target = cand
+                pick_reason = "visible nth(2) type"
+            except Exception as e:
+                logger.warning("[railway] visible nth(2): %s", e)
 
-    try:
-        await target.scroll_into_view_if_needed()
-        await target.click(timeout=8000)
-        await target.press("Control+a")
-        await page.wait_for_timeout(120)
-        await page.keyboard.type(dotted, delay=95)
-        await page.wait_for_timeout(350)
+    # 4) form__field ichidagi 3-chi input
+    if target is None:
+        fields = bar.locator("[class*='form__field'], [class*='field']").filter(has=page.locator("input"))
+        fc = await fields.count()
+        if fc >= 3:
+            try:
+                inner = fields.nth(2).locator("input").first
+                await inner.fill(dotted, timeout=6000, force=True)
+                target = inner
+                pick_reason = "form__field[2] input force"
+            except Exception as e:
+                logger.warning("[railway] form__field[2]: %s", e)
+
+    # 5) "07 Aprel" kalendar matni
+    if target is None:
+        if await _fill_date_via_calendar_trigger(page, bar, dotted):
+            pick_reason = "calendar trigger"
+        else:
+            logger.warning(
+                "[railway] sana o'rnatilmadi (2 stansiya inputi bor; sana alohida UI). "
+                "Kalendar trigger topilmadi."
+            )
+
+    logger.info("[railway] sana strategiya: %s; qiymat=%s", pick_reason, dotted)
+
+    if target is not None:
         try:
             after = await target.input_value()
             logger.info("[railway] sana input dan keyin: %r", after[:120])
         except Exception:
             pass
-    except Exception as e:
-        logger.warning("[railway] sana yozishda xato: %s", e)
-        return
 
     await _dismiss_railway_overlays(page)
 
