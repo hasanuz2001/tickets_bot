@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from urllib.parse import urlencode
 
@@ -66,6 +67,100 @@ def _iso_to_railway_dotted(date_iso: str) -> str:
     raw = (date_iso or "").strip()[:10]
     dt = datetime.strptime(raw, "%Y-%m-%d")
     return dt.strftime("%d.%m.%Y")
+
+
+_UZ_MONTH_NAMES: dict[int, tuple[str, ...]] = {
+    1: ("Yanvar", "yanvar"),
+    2: ("Fevral", "fevral"),
+    3: ("Mart", "mart"),
+    4: ("Aprel", "aprel"),
+    5: ("May", "may"),
+    6: ("Iyun", "iyun"),
+    7: ("Iyul", "iyul"),
+    8: ("Avgust", "avgust"),
+    9: ("Sentyabr", "sentyabr"),
+    10: ("Oktyabr", "oktyabr"),
+    11: ("Noyabr", "noyabr"),
+    12: ("Dekabr", "dekabr"),
+}
+
+
+def _search_bar_reflects_date_iso(bar_text: str, date_iso: str) -> bool:
+    """«10 Aprel» kabi matn maqsad sanaga (YYYY-MM-DD) mos keladimi."""
+    raw = (date_iso or "").strip()[:10]
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return True
+    t = re.sub(r"\s+", " ", (bar_text or "").replace("\u00a0", " ")).strip()
+    if not t:
+        return False
+    for name in _UZ_MONTH_NAMES.get(dt.month, ()):
+        if name.lower() not in t.lower():
+            continue
+        for day_s in (str(dt.day), f"{dt.day:02d}"):
+            if re.search(rf"\b{re.escape(day_s)}\s+{re.escape(name)}\b", t, re.I):
+                return True
+    return False
+
+
+async def _bar_inner_text_compact(bar) -> str:
+    try:
+        txt = await bar.inner_text()
+        return re.sub(r"\s+", " ", (txt or "").replace("\u00a0", " ")).strip()
+    except Exception:
+        return ""
+
+
+async def _get_train_page_state(page) -> dict:
+    try:
+        return await page.evaluate(
+            """() => {
+                const body = (document.body && document.body.innerText) || '';
+                const cards = document.querySelectorAll('.result-card').length;
+                const noTrain = /mavjud\\s+emas|rsatilgan\\s+sanada|поезд.*нет|нет\\s+поездов/i.test(body);
+                const spin = !!document.querySelector(
+                    ".mat-progress-spinner, [class*='mat-progress'], [class*='spinner']"
+                );
+                return { cards, noTrain, spin };
+            }"""
+        )
+    except Exception:
+        return {"cards": 0, "noTrain": False, "spin": False}
+
+
+async def _wait_train_results_or_banner(page, timeout_ms: int = 34000) -> str:
+    """
+    .result-card paydo bo'lguncha yoki barqaror «poyezd yo'q» + spinner yo'q.
+    Qaytaradi: 'results' | 'no_trains' | 'timeout'
+    """
+    t0 = time.monotonic()
+    stable_no_train = 0
+    last_key = None
+    while True:
+        st = await _get_train_page_state(page)
+        cards = int(st.get("cards") or 0)
+        no_tr = bool(st.get("noTrain"))
+        spin = bool(st.get("spin"))
+        key = (cards, no_tr, spin)
+        if key != last_key:
+            last_key = key
+            logger.info("[buy_ticket][wait] cards=%s noTrain=%s spin=%s", cards, no_tr, spin)
+
+        if cards > 0:
+            return "results"
+        if spin:
+            stable_no_train = 0
+        elif no_tr:
+            stable_no_train += 1
+            if stable_no_train >= 5:
+                return "no_trains"
+        else:
+            stable_no_train = 0
+
+        if (time.monotonic() - t0) * 1000 >= timeout_ms:
+            return "timeout"
+        await page.wait_for_timeout(400)
 
 
 async def _angular_set_input_value(locator, value: str) -> bool:
@@ -191,7 +286,7 @@ async def _log_railway_ui_snapshot(page, step: str) -> None:
                 const sd = sessionStorage.getItem('sd-value');
                 const bar = document.querySelector("[class*='search-trains']");
                 const barSnippet = bar ? t(bar.innerText).slice(0, 400) : '';
-                const noTrainBanner = /mavjud\\s+emas|поезд.*нет|нет\\s+поездов|не\\s+найден/i.test(body);
+                const noTrainBanner = /mavjud\\s+emas|rsatilgan\\s+sanada|поезд.*нет|нет\\s+поездов|не\\s+найден/i.test(body);
                 let trainClassNodes = 0;
                 try {
                     document.querySelectorAll("[class*='train']").forEach((el) => {
@@ -438,6 +533,29 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
     if target is not None:
         after = await _read_input_value_safe(target)
         logger.info("[railway][date] sana input dan keyin: %r", after[:120])
+
+    bar_txt = await _bar_inner_text_compact(bar)
+    reflects = _search_bar_reflects_date_iso(bar_txt, d_iso)
+    logger.info(
+        "[railway][date] bar matn ↔ sana_iso mosligi: %s | %s",
+        reflects,
+        bar_txt[:200],
+    )
+    if not reflects:
+        logger.info("[railway][date] ko'rinadigan sana farq qiladi — kalendar sinxron")
+        if await _fill_date_via_calendar_trigger(page, bar, dotted):
+            pick_reason = f"{pick_reason}+vis_sync" if pick_reason else "vis_sync"
+            if n_all >= 3:
+                v2 = await _read_input_value_safe(all_inp.nth(2))
+                logger.info("[railway][date] vis_sync keyin input[2]: %r", v2[:120])
+        else:
+            logger.warning("[railway][date] vis_sync (kalendar) ishlamadi")
+        bar_txt = await _bar_inner_text_compact(bar)
+        logger.info(
+            "[railway][date] vis_sync keyin moslik: %s | %s",
+            _search_bar_reflects_date_iso(bar_txt, d_iso),
+            bar_txt[:200],
+        )
 
     await _dismiss_railway_overlays(page)
     await _log_railway_ui_snapshot(page, "before_izlash")
@@ -1007,25 +1125,30 @@ async def open_ticket_page(
 
             await _open_trains_search(page, from_code, to_code, from_name, to_name, date)
 
+            outcome = await _wait_train_results_or_banner(page, 28000)
             clicked = False
-            try:
-                # [class*='train'] — search-trains bilan chalkashadi (darhol "topiladi")
-                await page.wait_for_selector(
-                    "[class*='train']:not([class*='search-trains']), "
-                    "[class*='Train']:not([class*='search-trains']), "
-                    ".result-card",
-                    timeout=20000,
-                )
+            if outcome == "results":
                 clicked = await _click_buy_for_train(page, train_number)
-            except PWTimeout:
-                logger.warning("[open_ticket] Ro'yxat kutilmadi")
+            elif outcome == "no_trains":
+                logger.info("[open_ticket] Tanlangan sanada poyezd yo'q (banner)")
+            else:
+                logger.warning("[open_ticket] Ro'yxat kutish timeout")
 
             scr = await page.screenshot(full_page=False)
+            if outcome == "no_trains":
+                msg = (
+                    "ℹ️ Tanlangan sanada ushbu yo'nalishda poyezdlar ko'rinmadi "
+                    "(eticket javobi bo'sh / «mavjud emas»)."
+                )
+            elif outcome == "timeout":
+                msg = "ℹ️ Poyezdlar ro'yxati yuklanmadi yoki juda uzoq kutildi."
+            else:
+                msg = "✅ To'lov bosqichiga yaqin" if clicked else "ℹ️ Poyezdlar sahifasi"
             return {
                 "success": True,
                 "screenshot": scr,
                 "url": page.url if clicked else trains_url,
-                "message": "✅ To'lov bosqichiga yaqin" if clicked else "ℹ️ Poyezdlar sahifasi",
+                "message": msg,
             }
         except Exception as e:
             logger.exception("[open_ticket] %s", e)
@@ -1096,34 +1219,52 @@ async def buy_ticket(
             )
             logger.info("[buy_ticket][2/6] open_trains tugadi | url=%s", trains_url[:240])
 
-            sel_train = (
-                "[class*='train']:not([class*='search-trains']), "
-                "[class*='Train']:not([class*='search-trains']), "
-                ".result-card"
-            )
             logger.info(
-                "[buy_ticket][3/6] kutilmoqda DOM selector (25s): %s",
-                sel_train[:120],
+                "[buy_ticket][3/6] qidiruv natijasi: .result-card yoki barqaror «mavjud emas» (~34s)"
             )
-            try:
-                await page.wait_for_selector(sel_train, timeout=25000)
-            except PWTimeout:
-                await _log_railway_ui_snapshot(page, "buy_ticket_train_selector_timeout")
-                logger.warning("[buy_ticket][3/6] TIMEOUT: poyezd/ro'yxat selector 25s ichida yo'q")
-                raise
-            logger.info(
-                "[buy_ticket][4/6] selector topildi (ehtimol chalkashuv: search-trains emas train class)"
-            )
-            await _log_railway_ui_snapshot(page, "buy_ticket_after_list_selector")
+            outcome = await _wait_train_results_or_banner(page, 34000)
+            await _log_railway_ui_snapshot(page, f"buy_ticket_wait_{outcome}")
+            logger.info("[buy_ticket][4/6] kutish natijasi: %s", outcome)
+
+            if outcome == "timeout":
+                scr = await page.screenshot(full_page=True)
+                return {
+                    "status": "error",
+                    "message": (
+                        "Poyezdlar ro'yxati yuklanmadi yoki javob juda uzoq kutildi. "
+                        "Internet yoki eticket.railway.uz ni keyinroq urinib ko'ring."
+                    ),
+                    "screenshot": scr,
+                }
+            if outcome == "no_trains":
+                scr = await page.screenshot(full_page=True)
+                return {
+                    "status": "error",
+                    "message": (
+                        "Tanlangan sanada ushbu yo'nalishda poyezdlar ko'rinmadi "
+                        "(sayt: shu sanada poyezd yo'q yoki ro'yxat bo'sh). "
+                        "Sanani yoki yo'nalishni tekshirib, qayta urinib ko'ring."
+                    ),
+                    "screenshot": scr,
+                }
 
             logger.info("[buy_ticket][5/6] _click_buy_for_train(%r)", train_number)
             if not await _click_buy_for_train(page, train_number):
                 scr = await page.screenshot(full_page=True)
-                return {
-                    "status": "error",
-                    "message": f"Poyezd №{train_number} yoki sotib olish tugmasi topilmadi.",
-                    "screenshot": scr,
-                }
+                st = await _get_train_page_state(page)
+                nc = int(st.get("cards") or 0)
+                nt = bool(st.get("noTrain"))
+                if nc == 0 or nt:
+                    msg = (
+                        "Ro'yxat bo'sh yoki tanlangan sanada poyezd mavjud emas — "
+                        f"№{train_number} ni tanlab bo'lmadi."
+                    )
+                else:
+                    msg = (
+                        f"Poyezd №{train_number} yoki «Sotib olish» tugmasi ro'yxatda topilmadi. "
+                        "Boshqa poyezd tanlang yoki qo'lda tekshiring."
+                    )
+                return {"status": "error", "message": msg, "screenshot": scr}
 
             logger.info("[buy_ticket][6/6] vagon/joy va yo'lovchi bosqichlari")
             await _pick_car_and_seat(page, car_type or "")
