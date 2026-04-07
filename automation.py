@@ -6,6 +6,7 @@ RAILWAY_PASSWORD bilan avtomatik bron. Playwright: login → poyezdlar → sotib
 import logging
 import os
 import re
+from urllib.parse import urlencode
 
 import httpx
 from dotenv import load_dotenv
@@ -18,6 +19,29 @@ logger = logging.getLogger(__name__)
 RAILWAY = "https://eticket.railway.uz"
 RAILWAY_LOGIN = os.getenv("RAILWAY_LOGIN", "").strip()
 RAILWAY_PASS = os.getenv("RAILWAY_PASSWORD", "").strip()
+
+
+def _trains_page_url(
+    from_code: str,
+    to_code: str,
+    from_name: str,
+    to_name: str,
+    date_iso: str,
+    lang: str = "uz",
+) -> str:
+    """
+    SPA depCode/arvCode ni URL dan o'qimaydi. Query: sd-value (YYYY-MM-DD), sf-code/st-code,
+    sf-name/st-name; sd-value2 bo'sh — faqat yo'nalish.
+    """
+    pairs = [
+        ("sd-value", date_iso),
+        ("sd-value2", ""),
+        ("sf-code", str(from_code)),
+        ("st-code", str(to_code)),
+        ("sf-name", (from_name or "").strip() or str(from_code)),
+        ("st-name", (to_name or "").strip() or str(to_code)),
+    ]
+    return f"{RAILWAY}/{lang}/pages/trains-page?{urlencode(pairs)}"
 
 # networkidle SPA da tez-tez osilib qoladi — asosan domcontentloaded
 _WAIT = "domcontentloaded"
@@ -356,11 +380,10 @@ async def open_ticket_page(
     to_code: str,
     date: str,
     train_number: str,
+    from_name: str = "",
+    to_name: str = "",
 ) -> dict:
-    trains_url = (
-        f"{RAILWAY}/uz/pages/trains-page"
-        f"?depCode={from_code}&arvCode={to_code}&date={date}"
-    )
+    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, date)
 
     if not RAILWAY_LOGIN or not RAILWAY_PASS:
         return {
@@ -445,10 +468,7 @@ async def buy_ticket(
             "screenshot": None,
         }
 
-    trains_url = (
-        f"{RAILWAY}/uz/pages/trains-page"
-        f"?depCode={from_code}&arvCode={to_code}&date={date}"
-    )
+    trains_url = _trains_page_url(from_code, to_code, from_name, to_name, date)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=_HEADLESS, args=_browser_args())
@@ -546,6 +566,8 @@ async def send_booking_notification(
         to_code=sub["to_code"],
         date=sub["date"],
         train_number=train["number"],
+        from_name=sub.get("from_name") or "",
+        to_name=sub.get("to_name") or "",
     )
 
     tg = f"https://api.telegram.org/bot{bot_token}"
