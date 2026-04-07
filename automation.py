@@ -1,6 +1,6 @@
 """
-eticket.railway.uz — bitta umumiy login (RAILWAY_LOGIN / RAILWAY_PASSWORD) orqali avtomatik bron.
-Playwright: login → poyezdlar → Купить → vagon/joy → yo'lovchi → to'lov sahifasi.
+eticket.railway.uz — RAILWAY_LOGIN: telefon (998... yoki 9 raqam) yoki email (@).
+RAILWAY_PASSWORD bilan avtomatik bron. Playwright: login → poyezdlar → sotib olish → to'lov.
 """
 
 import logging
@@ -24,6 +24,26 @@ _WAIT = "domcontentloaded"
 _HEADLESS = os.getenv("RAILWAY_AUTOMATION_HEADLESS", "true").lower() in ("1", "true", "yes")
 
 
+def _login_is_email(login: str) -> bool:
+    return "@" in (login or "")
+
+
+def _normalize_uz_phone(login: str) -> str:
+    """
+    Maskali maydonga: faqat raqamlar, 998 bilan 12 ta (masalan 998901234567).
+    """
+    digits = re.sub(r"\D", "", login or "")
+    if not digits:
+        return ""
+    if digits.startswith("998") and len(digits) >= 12:
+        return digits[:12]
+    if len(digits) == 9:
+        return "998" + digits
+    if len(digits) == 12 and digits.startswith("998"):
+        return digits
+    return digits
+
+
 def _browser_args() -> list[str]:
     return [
         "--no-sandbox",
@@ -35,7 +55,8 @@ def _browser_args() -> list[str]:
 
 async def _login_railway(page) -> tuple[bool, str]:
     """
-    To'g'ridan-to'g'ri /ru/auth/login — SPA 'Вход' bosishdan ishonchliroq.
+    /ru/auth/login — telefon yoki pochta (RAILWAY_LOGIN da @ bo'lsa pochta).
+    UZ interfeysda TELEFON/POCHTA, VOITI tugmalari ham qo'llab-quvvatlanadi.
     """
     try:
         await page.goto(f"{RAILWAY}/ru/auth/login", wait_until=_WAIT, timeout=35000)
@@ -44,35 +65,84 @@ async def _login_railway(page) -> tuple[bool, str]:
 
     await page.wait_for_timeout(900)
 
-    if "@" in RAILWAY_LOGIN:
+    use_email = _login_is_email(RAILWAY_LOGIN)
+
+    if use_email:
         for sel in (
             "button:has-text('ПОЧТА')",
             "span:has-text('ПОЧТА')",
             "div[role='tab']:has-text('ПОЧТА')",
             "a:has-text('ПОЧТА')",
+            "button:has-text('POCHTA')",
+            "span:has-text('POCHTA')",
+            "div[role='tab']:has-text('POCHTA')",
         ):
             tab = page.locator(sel).first
             if await tab.count():
                 try:
                     await tab.click(timeout=3000)
                     await page.wait_for_timeout(600)
-                    logger.info("[railway] ПОЧТА tab")
+                    logger.info("[railway] pochta tab")
+                except Exception:
+                    pass
+                break
+    else:
+        for sel in (
+            "button:has-text('ТЕЛЕФОН')",
+            "span:has-text('ТЕЛЕФОН')",
+            "div[role='tab']:has-text('ТЕЛЕФОН')",
+            "a:has-text('ТЕЛЕФОН')",
+            "button:has-text('TELEFON')",
+            "span:has-text('TELEFON')",
+            "div[role='tab']:has-text('TELEFON')",
+        ):
+            tab = page.locator(sel).first
+            if await tab.count():
+                try:
+                    await tab.click(timeout=3000)
+                    await page.wait_for_timeout(600)
+                    logger.info("[railway] telefon tab")
                 except Exception:
                     pass
                 break
 
     try:
-        login_el = page.locator("input[type='email']").first
-        if not await login_el.count():
-            login_el = page.locator("input[name*='mail' i], input[name*='email' i]").first
-        if not await login_el.count():
-            login_el = page.locator("form input[type='text']").first
-        await login_el.fill(RAILWAY_LOGIN, timeout=12000)
+        if use_email:
+            login_el = page.locator("input[type='email']").first
+            if not await login_el.count():
+                login_el = page.locator("input[name*='mail' i], input[name*='email' i]").first
+            if not await login_el.count():
+                login_el = page.locator("form input[type='text']").first
+            await login_el.fill(RAILWAY_LOGIN.strip(), timeout=12000)
+        else:
+            phone_digits = _normalize_uz_phone(RAILWAY_LOGIN)
+            if not phone_digits or len(phone_digits) < 12:
+                return (
+                    False,
+                    "Telefon noto'g'ri: RAILWAY_LOGIN da 9 yoki 12 raqam (998...) kiriting.",
+                )
+            login_el = page.locator("input[type='tel']").first
+            if not await login_el.count():
+                login_el = page.locator(
+                    "input[placeholder*='998' i], input[name*='phone' i], "
+                    "input[autocomplete='tel'], input[inputmode='numeric']"
+                ).first
+            if not await login_el.count():
+                login_el = page.locator("form input[type='text']").first
+            await login_el.click(timeout=5000)
+            await login_el.fill("", timeout=2000)
+            try:
+                await login_el.fill(phone_digits, timeout=12000)
+            except Exception:
+                await login_el.press_sequentially(phone_digits, delay=50)
+            await page.wait_for_timeout(400)
+
         await page.locator("input[type='password']").first.fill(RAILWAY_PASS, timeout=8000)
 
         submit = page.locator(
             "button:has-text('ВОЙТИ'), button:has-text('Войти'), "
-            "button[type='submit']"
+            "button:has-text('VOITI'), button:has-text('Voiti'), "
+            "button:has-text('Kirish'), button[type='submit']"
         ).first
         await submit.click(timeout=8000)
     except Exception as e:
