@@ -1520,7 +1520,6 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         "[class*='scheme' i] [data-seat]:not([disabled])",
         "[class*='scheme' i] [data-place]:not([disabled])",
         "[class*='scheme' i] [class*='seat' i]",
-        "[class*='scheme' i] [class*='place' i]",
         "[data-seat]:not([disabled])",
         "[data-place]:not([disabled])",
         "button.seat:not(.disabled):not(.busy):not(.occupied)",
@@ -1569,6 +1568,16 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     continue
                 # Juda uzun konteyner matnlari (narx/tavsif) bo'lsa joy sifatida qabul qilmaymiz.
                 if len(blob) > 64:
+                    continue
+                # "Faqat joy raqami"ga yaqin bo'lishi kerak (masalan: "14" yoki data-seat=14).
+                txt_only = str(meta.get("txt") or "").strip()
+                ds_only = str(meta.get("ds") or "").strip()
+                dp_only = str(meta.get("dp") or "").strip()
+                if not (
+                    re.fullmatch(r"\d{1,3}", txt_only or "")
+                    or re.fullmatch(r"\d{1,3}", ds_only or "")
+                    or re.fullmatch(r"\d{1,3}", dp_only or "")
+                ):
                     continue
                 low_blob = blob.lower()
                 if any(x in low_blob for x in ("vagon", "вагон", "narx", "сум", "o'rindiq", "bo'sh o'rin")):
@@ -1641,6 +1650,69 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             return
     except Exception as ex:
         logger.warning("[buy] js precise seat fallback xato: %s", ex)
+
+    try:
+        # Qo'shimcha fallback: raqamli matn (masalan "14") turgan tugunni topib,
+        # eng yaqin clickable parentni bosamiz.
+        js_numeric_parent = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                };
+                const disabledLike = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return (
+                        el.hasAttribute('disabled') ||
+                        el.getAttribute('aria-disabled') === 'true' ||
+                        c.includes('disabled') ||
+                        c.includes('busy') ||
+                        c.includes('occupied') ||
+                        c.includes('sold')
+                    );
+                };
+                const nums = Array.from(root.querySelectorAll('*')).filter((el) => {
+                    const t = String(el.textContent || '').trim();
+                    if (!/^\\d{1,3}$/.test(t)) return false;
+                    if (!visible(el)) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width <= 44 && r.height <= 44;
+                });
+                if (!nums.length) return false;
+                const shuffled = nums.sort(() => Math.random() - 0.5);
+                for (const n of shuffled) {
+                    let p = n;
+                    for (let i = 0; i < 4 && p; i++) {
+                        const cls = String(p.className || '').toLowerCase();
+                        const clickable =
+                            p.tagName === 'BUTTON' ||
+                            p.tagName === 'A' ||
+                            p.getAttribute('role') === 'button' ||
+                            p.hasAttribute('onclick') ||
+                            cls.includes('seat') ||
+                            cls.includes('place');
+                        if (clickable && visible(p) && !disabledLike(p)) {
+                            p.scrollIntoView({ block: 'center', inline: 'center' });
+                            p.click();
+                            return true;
+                        }
+                        p = p.parentElement;
+                    }
+                }
+                return false;
+            }"""
+        )
+        if js_numeric_parent:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_numeric_parent")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js numeric-parent fallback xato: %s", ex)
 
     try:
         js_clicked = await page.evaluate(
