@@ -6,6 +6,8 @@ if (tg) { tg.ready(); tg.expand(); }
 
 const TG_USER     = tg?.initDataUnsafe?.user;
 const TG_USER_ID  = TG_USER?.id ? String(TG_USER.id) : null;
+const SEARCH_HISTORY_KEY = "tickets_bot_search_history_v1";
+const SEARCH_HISTORY_MAX = 8;
 
 // API base — same origin in prod, localhost in dev
 const API_BASE = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
@@ -190,7 +192,108 @@ const state = {
   pickerTarget: null,
   screenStack: ["screenMain"],
   activeSubs: {},
+  searchHistory: [],
 };
+
+function stationNameByCode(code) {
+  const s = STATIONS.find(x => String(x.code) === String(code));
+  return s ? s.name : String(code || "");
+}
+
+function historyEntryFromState() {
+  return {
+    fromCode: state.fromCode,
+    fromName: state.fromName || stationNameByCode(state.fromCode),
+    toCode: state.toCode,
+    toName: state.toName || stationNameByCode(state.toCode),
+    date: state.date,
+    dateLabel: state.dateLabel || state.date,
+    timeFrom: state.timeFrom || null,
+    timeTo: state.timeTo || null,
+    trainBrandCsv: state.trainBrandCsv || "all",
+    comfortCsv: state.comfortCsv || "all",
+    savedAt: Date.now(),
+  };
+}
+
+function historyKey(e) {
+  return [
+    e.fromCode || "",
+    e.toCode || "",
+    e.date || "",
+    e.timeFrom || "",
+    e.timeTo || "",
+    e.trainBrandCsv || "all",
+    e.comfortCsv || "all",
+  ].join("|");
+}
+
+function loadSearchHistory() {
+  try {
+    const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    state.searchHistory = Array.isArray(arr) ? arr.filter(x => x && x.fromCode && x.toCode && x.date) : [];
+  } catch {
+    state.searchHistory = [];
+  }
+}
+
+function saveSearchHistory() {
+  try {
+    localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(state.searchHistory.slice(0, SEARCH_HISTORY_MAX)));
+  } catch {
+    /* ignore */
+  }
+}
+
+function pushSearchHistoryFromState() {
+  if (!(state.fromCode && state.toCode && state.date)) return;
+  const e = historyEntryFromState();
+  const k = historyKey(e);
+  state.searchHistory = [e, ...state.searchHistory.filter(x => historyKey(x) !== k)].slice(0, SEARCH_HISTORY_MAX);
+  saveSearchHistory();
+  renderSearchHistory();
+}
+
+function renderSearchHistory() {
+  const box = document.getElementById("historyList");
+  const wrap = document.getElementById("historySection");
+  if (!box || !wrap) return;
+  if (!state.searchHistory.length) {
+    wrap.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "";
+  box.innerHTML = state.searchHistory.map((h, i) => {
+    const t = (h.timeFrom || h.timeTo) ? ` · ${h.timeFrom || "00:00"}-${h.timeTo || "23:59"}` : "";
+    return `
+      <button type="button" class="history-item" onclick="applyHistory(${i})">
+        <div class="history-route">${h.fromName} → ${h.toName}</div>
+        <div class="history-meta">${h.dateLabel || h.date}${t}</div>
+      </button>
+    `;
+  }).join("");
+}
+
+async function applyHistory(idx) {
+  const h = state.searchHistory[idx];
+  if (!h) return;
+  state.fromCode = h.fromCode; state.fromName = h.fromName || stationNameByCode(h.fromCode);
+  state.toCode = h.toCode; state.toName = h.toName || stationNameByCode(h.toCode);
+  state.date = h.date; state.dateLabel = h.dateLabel || h.date;
+  state.timeFrom = h.timeFrom || null; state.timeTo = h.timeTo || null;
+  state.trainBrandCsv = normalizeTrainBrandCsv(h.trainBrandCsv || "all");
+  state.comfortCsv = normalizeComfortCsv(h.comfortCsv || "all");
+  setField("fromValue", state.fromName);
+  setField("toValue", state.toName);
+  setField("dateValue", state.dateLabel);
+  setField("timeValue", (state.timeFrom || state.timeTo) ? `${state.timeFrom || "00:00"} — ${state.timeTo || "23:59"}` : "Barcha vaqt");
+  setField("trainBrandValue", trainBrandCsvLabel());
+  setField("comfortValue", comfortCsvLabel());
+  updateSearchBtn();
+  await doSearch();
+}
 
 // ───────────────────────────── NAVIGATION ────────────────────────────────────
 function showScreen(id) {
@@ -531,6 +634,7 @@ async function showAllTrainBrandsAndRescan() {
 // ───────────────────────────── SEARCH ────────────────────────────────────────
 async function doSearch() {
   if (!(state.fromCode && state.toCode && state.date)) return;
+  pushSearchHistoryFromState();
   showLoading(true, "Poyezdlar qidirilmoqda...");
   try {
     const resp = await apiFetch("/api/trains", {
@@ -1436,6 +1540,8 @@ function setupMultiPickerDelegation() {
 }
 
 setupMultiPickerDelegation();
+loadSearchHistory();
+renderSearchHistory();
 updateSearchBtn();
 loadActiveSubs();
 loadProfile();
