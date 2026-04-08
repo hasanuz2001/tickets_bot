@@ -1492,6 +1492,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         document.querySelector('[class*="seat-map" i]') ||
                         document.body;
                     const all = Array.from(root.querySelectorAll('*'));
+                    const allDoc = Array.from(document.querySelectorAll('*'));
                     const cls = (el) => String(el.className || '').toLowerCase();
                     const visible = (el) => {
                         const st = window.getComputedStyle(el);
@@ -1506,7 +1507,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                             if (visible(el)) selected++;
                         }
                     });
-                    const continueLike = all.find((el) => {
+                    const continueLike = allDoc.find((el) => {
                         const t = String(el.textContent || '').toLowerCase();
                         if (!visible(el)) return false;
                         if (!(t.includes("davom") || t.includes("продолж") || t.includes("далее") || t.includes("to'lov") || t.includes("к оплате"))) return false;
@@ -2068,7 +2069,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     after_free = int(after.get("freeSeats") or -1)
                     seat_ok = (
                         (after_sel > before_sel) or
-                        (before_free >= 0 and after_free >= 0 and after_free < before_free)
+                        (before_free >= 0 and after_free >= 0 and after_free < before_free) or
+                        bool(after.get("continueEnabled"))
                     )
                     if seat_ok and not bool(after.get("seatWarn")):
                         logger.info(
