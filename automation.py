@@ -1199,6 +1199,14 @@ async def _click_buy_for_train(
 
     await _log_railway_ui_snapshot(page, "click_buy_before_scan")
     variants = _train_number_match_variants(tnum)
+    buy_like_xpath = (
+        "xpath=.//*["
+        "self::button or self::a or @role='button' or "
+        "contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'btn') or "
+        "contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'button')"
+        "][contains(., 'Poyezdni tanlash') or contains(., 'poyezdni tanlash') or "
+        "contains(., 'Купить') or contains(., 'Sotib') or contains(., 'Xarid') or contains(., 'Tanlash')]"
+    )
     logger.info(
         "[buy][click_train] boshlandi tnum=%r variantlar=%s",
         tnum,
@@ -1248,7 +1256,10 @@ async def _click_buy_for_train(
         # Fallback: sahifada ko'pincha "Sharg 709Ф (СК)" format bo'ladi (№ belgisisiz).
         buy_buttons = page.locator(
             "button:has-text('Poyezdni tanlash'), button:has-text('poyezdni tanlash'), "
-            "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid')"
+            "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid'), "
+            "a:has-text('Poyezdni tanlash'), a:has-text('Купить'), a:has-text('Tanlash'), "
+            "[role='button']:has-text('Poyezdni tanlash'), [role='button']:has-text('Tanlash'), "
+            "[class*='btn']:has-text('Poyezdni tanlash'), [class*='button']:has-text('Poyezdni tanlash')"
         )
         btn_count = await buy_buttons.count()
         logger.info("[buy][click_train] fallback tugmalar soni=%s", btn_count)
@@ -1301,7 +1312,10 @@ async def _click_buy_for_train(
             logger.info("[buy][click_train] vaqt fallback: %s -> %s", dep, arr)
             time_buttons = page.locator(
                 "button:has-text('Poyezdni tanlash'), button:has-text('poyezdni tanlash'), "
-                "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid')"
+                "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid'), "
+                "a:has-text('Poyezdni tanlash'), a:has-text('Купить'), a:has-text('Tanlash'), "
+                "[role='button']:has-text('Poyezdni tanlash'), [role='button']:has-text('Tanlash'), "
+                "[class*='btn']:has-text('Poyezdni tanlash'), [class*='button']:has-text('Poyezdni tanlash')"
             )
             tcnt = await time_buttons.count()
             for i in range(tcnt):
@@ -1338,6 +1352,29 @@ async def _click_buy_for_train(
                             ex,
                         )
                         continue
+
+            # Agar global clickable selectorlar ham bo'sh bo'lsa:
+            # vaqt satrini topib, shu qatordagi "buy-like" elementni bosamiz.
+            dep_re = re.escape(dep)
+            arr_re = re.escape(arr)
+            row_marker = page.get_by_text(re.compile(rf"\b{dep_re}\b")).first
+            if await row_marker.count():
+                try:
+                    row = row_marker.locator(
+                        f"xpath=ancestor::*[contains(., '{dep}') and contains(., '{arr}')][1]"
+                    ).first
+                    row_btn = row.locator(buy_like_xpath).first
+                    if await row_btn.count():
+                        await row_btn.scroll_into_view_if_needed()
+                        await row_btn.click(timeout=12000, force=True)
+                        await page.wait_for_timeout(2200)
+                        await _log_railway_ui_snapshot(
+                            page, "click_buy_after_click_time_row_fallback"
+                        )
+                        logger.info("[buy][click_train] vaqt+qator fallback orqali bosildi")
+                        return True
+                except Exception as ex:
+                    logger.warning("[buy][click_train] vaqt+qator fallback xato: %s", ex)
 
         logger.warning("[buy] Poyezd №%s topilmadi (qidiruv: %s)", tnum, variants[:6])
         await _log_railway_ui_snapshot(page, "click_buy_train_not_found")
