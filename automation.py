@@ -1970,6 +1970,97 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     except Exception as ex:
         logger.warning("[buy] js pointer-any fallback xato: %s", ex)
 
+    # Browser-level mouse click fallback: SVG/chizma ichida koordinata bilan bosish.
+    # JS click event ba'zi Angular handlerlarni trigger qilmaydi, real mouse click esa trigger qiladi.
+    try:
+        click_points = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                };
+                const small = (r) => r.width <= 72 && r.height <= 72 && r.width >= 10 && r.height >= 10;
+                const points = [];
+
+                // 1) Raqamli tugunlar (masalan "14") markazi.
+                const numeric = Array.from(root.querySelectorAll('*')).filter((el) => {
+                    const t = String(el.textContent || '').trim();
+                    if (!/^\\d{1,3}$/.test(t)) return false;
+                    if (!visible(el)) return false;
+                    const r = el.getBoundingClientRect();
+                    return small(r);
+                });
+                for (const el of numeric) {
+                    const r = el.getBoundingClientRect();
+                    points.push({
+                        x: Math.round(r.left + r.width / 2),
+                        y: Math.round(r.top + r.height / 2),
+                        tag: String(el.tagName || '').toLowerCase(),
+                    });
+                }
+
+                // 2) Pointer/SVG kichik tugunlar.
+                const pointer = Array.from(root.querySelectorAll('*')).filter((el) => {
+                    if (!visible(el)) return false;
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    if (!small(r)) return false;
+                    return st.cursor === 'pointer' || el instanceof SVGElement;
+                });
+                for (const el of pointer) {
+                    const r = el.getBoundingClientRect();
+                    points.push({
+                        x: Math.round(r.left + r.width / 2),
+                        y: Math.round(r.top + r.height / 2),
+                        tag: String(el.tagName || '').toLowerCase(),
+                    });
+                }
+
+                // Dublikatlarni chiqaramiz.
+                const uniq = [];
+                const seen = new Set();
+                for (const p of points) {
+                    const k = `${p.x}:${p.y}`;
+                    if (seen.has(k)) continue;
+                    seen.add(k);
+                    uniq.push(p);
+                }
+                return uniq.slice(0, 120);
+            }"""
+        )
+        if click_points:
+            random.shuffle(click_points)
+            probe_before = await _seat_selection_probe()
+            # Ko'p urinish qilmaymiz: eng ko'pi 24 ta nuqta.
+            for p in click_points[:24]:
+                x = int(p.get("x") or 0)
+                y = int(p.get("y") or 0)
+                if x <= 0 or y <= 0:
+                    continue
+                try:
+                    await page.mouse.click(x, y)
+                    await page.wait_for_timeout(220)
+                    after = await _seat_selection_probe()
+                    if int(after.get("selected") or 0) > int(probe_before.get("selected") or 0) or bool(
+                        after.get("continueEnabled")
+                    ):
+                        logger.info(
+                            "[buy] Random joy tanlandi: mouse_xy (%s,%s) tag=%s",
+                            x,
+                            y,
+                            p.get("tag") or "-",
+                        )
+                        return
+                except Exception:
+                    continue
+    except Exception as ex:
+        logger.warning("[buy] mouse_xy seat fallback xato: %s", ex)
+
     # Oxirgi fallback: scheme ichidagi raqamli label markazidan real klik targetni topib bosish.
     # (Ba'zi UIlarda raqam span ichida, haqiqiy click esa tepada joylashgan parentga tushadi.)
     try:
