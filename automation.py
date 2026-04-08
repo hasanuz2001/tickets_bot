@@ -1503,6 +1503,13 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             try:
                 if not await btn.is_visible():
                     continue
+                # "place" klasslari ba'zan konteynerlarga ham tushadi; haqiqiy joy odatda raqamli bo'ladi.
+                try:
+                    t = re.sub(r"\s+", "", (await btn.inner_text()) or "")
+                except Exception:
+                    t = ""
+                if t and not re.fullmatch(r"\d{1,3}", t):
+                    continue
                 await btn.click(timeout=5000)
                 await page.wait_for_timeout(1000)
                 logger.info("[buy] Random joy tanlandi: %s (idx=%s/%s)", sel, idx, cnt)
@@ -1590,10 +1597,14 @@ async def _click_continue_to_payment(page) -> bool:
 
 def _looks_like_payment_step(url: str, content_snippet: str) -> bool:
     u = url.lower()
+    if any(x in u for x in ("/cars-page", "/trains-page")):
+        return False
     if any(x in u for x in ("pay", "payment", "oplata", "tolov", "checkout", "order")):
         return True
     c = content_snippet.lower()
-    return any(x in c for x in ("оплат", "to'lov", "тўлов", "payment", "payme", "click"))
+    return any(
+        x in c for x in ("оплат", "to'lov", "тўлов", "payment", "payme", "click.uz")
+    )
 
 
 async def open_ticket_page(
@@ -1823,6 +1834,24 @@ async def buy_ticket(
             await page.wait_for_timeout(600)
 
             await _click_continue_to_payment(page)
+            await page.wait_for_timeout(1200)
+            # Cars-page da qolib ketgan bo'lsa (masalan "joy tanlamadingiz"), yana bir marta tanlab bosamiz.
+            cur_url = (page.url or "").lower()
+            if "/cars-page" in cur_url:
+                try:
+                    body_now = (await page.inner_text("body") or "").lower()
+                except Exception:
+                    body_now = ""
+                if (
+                    "joy tanlamadingiz" in body_now
+                    or "место не выбра" in body_now
+                    or "select a seat" in body_now
+                    or True
+                ):
+                    logger.info("[buy] cars-page da qoldi: joyni qayta tanlab davom etish retry")
+                    await _pick_car_and_seat(page, car_type or "")
+                    await page.wait_for_timeout(500)
+                    await _click_continue_to_payment(page)
 
             screenshot = await page.screenshot(full_page=False)
             final_url = page.url
