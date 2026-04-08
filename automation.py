@@ -1238,6 +1238,58 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
             break
 
     if not marker or not await marker.count():
+        # Fallback: sahifada ko'pincha "Sharg 709Ф (СК)" format bo'ladi (№ belgisisiz).
+        buy_buttons = page.locator(
+            "button:has-text('Poyezdni tanlash'), button:has-text('poyezdni tanlash'), "
+            "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid')"
+        )
+        btn_count = await buy_buttons.count()
+        logger.info("[buy][click_train] fallback tugmalar soni=%s", btn_count)
+        for i in range(btn_count):
+            btn = buy_buttons.nth(i)
+            try:
+                if not await btn.is_visible():
+                    continue
+            except Exception:
+                continue
+            try:
+                ctx = btn.locator(
+                    "xpath=ancestor::*[self::div or self::li or self::article or self::section][1]"
+                ).first
+                ctx_txt = await ctx.inner_text()
+            except Exception:
+                try:
+                    ctx_txt = await btn.inner_text()
+                except Exception:
+                    ctx_txt = ""
+            low = (ctx_txt or "").lower()
+            if not low:
+                continue
+            hit = False
+            for cand in variants:
+                c = (cand or "").strip().lower()
+                if not c:
+                    continue
+                if c in low:
+                    hit = True
+                    break
+                d = re.sub(r"\D", "", c)
+                if len(d) >= 2 and re.search(rf"\b{re.escape(d)}\s*[фf]?\b", low, re.I):
+                    hit = True
+                    break
+            if not hit:
+                continue
+            try:
+                await btn.scroll_into_view_if_needed()
+                await btn.click(timeout=12000)
+                await page.wait_for_timeout(2200)
+                await _log_railway_ui_snapshot(page, "click_buy_after_click_fallback")
+                logger.info("[buy][click_train] fallback orqali bosildi: idx=%s", i)
+                return True
+            except Exception as ex:
+                logger.warning("[buy][click_train] fallback click xato idx=%s err=%s", i, ex)
+                continue
+
         logger.warning("[buy] Poyezd №%s topilmadi (qidiruv: %s)", tnum, variants[:6])
         await _log_railway_ui_snapshot(page, "click_buy_train_not_found")
         return False
