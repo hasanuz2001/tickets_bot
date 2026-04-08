@@ -183,23 +183,20 @@ async def _select_date_via_calendar_grid(page, bar, date_iso: str) -> bool:
         return False
 
     await page.wait_for_timeout(550)
-    cal = page.locator(".bs-datepicker-container").first
-    if not await cal.count():
-        cal = (
-            page.locator(
-                ".bs-datepicker-container, [class*='bs-datepicker'], [class*='datepicker'], [class*='calendar']"
-            )
-            .filter(has=page.locator("table"))
-            .first
+    cal = page.locator(
+        ".bs-datepicker-container, [class*='bs-datepicker'], [class*='date-picker'], [class*='datepicker'], [class*='calendar'], [role='dialog']"
+    ).filter(
+        has=page.locator(
+            "xpath=.//*[contains(., '202') and (contains(., 'Aprel') or contains(., 'May') or contains(., 'Yanvar') or contains(., 'Du Se Ch Pa Ju Sh Ya') or contains(., 'Mo Tu We Th Fr Sa Su'))]"
         )
+    ).first
     if not await cal.count():
         cal = page.locator(
-            "xpath=(//*[self::div or self::section][.//table][contains(., '20') and (contains(., 'Aprel') or contains(., 'May') or contains(., 'Yanvar') or contains(., 'Du Se Ch Pa Ju Sh Ya') or contains(., 'Mo Tu We Th Fr Sa Su'))])[1]"
+            "xpath=(//*[self::div or self::section or self::aside][contains(., '202') and (contains(., 'Aprel') or contains(., 'May') or contains(., 'Yanvar') or contains(., 'Du Se Ch Pa Ju Sh Ya') or contains(., 'Mo Tu We Th Fr Sa Su'))])[last()]"
         ).first
     if not await cal.count():
-        logger.warning("[railway][date] grid: konteyner topilmadi")
-        await page.keyboard.press("Escape")
-        return False
+        logger.warning("[railway][date] grid: konteyner topilmadi (fallback global kun bosish)")
+        cal = page.locator("body").first
 
     prev_b = cal.locator("button.previous, .previous, .bs-datepicker-navigation-previous").first
     next_b = cal.locator("button.next, .next, .bs-datepicker-navigation-next").first
@@ -237,16 +234,19 @@ async def _select_date_via_calendar_grid(page, bar, date_iso: str) -> bool:
         await page.keyboard.press("Escape")
         return False
 
-    day_re = re.compile(rf"^{dt.day}$")
+    day_re = re.compile(rf"^\s*{dt.day}\s*$")
     try:
-        body = cal.locator(".bs-datepicker-body, tbody").first
-        cell = body.locator("td:not(.disabled):not(.is-other-month) span, td:not(.disabled):not(.is-other-month) button").filter(
-            has_text=day_re
+        body = cal.locator(".bs-datepicker-body, tbody, [class*='day'], [class*='calendar']").first
+        cell = body.locator(
+            "xpath=.//*[self::button or self::span or self::div or self::td]"
+            f"[normalize-space(text())='{dt.day}']"
+            "[not(contains(translate(@class,'DISABLEDOUTSIDE','disabledoutside'),'disabled'))]"
+            "[not(contains(translate(@class,'DISABLEDOUTSIDE','disabledoutside'),'outside'))]"
         ).first
         if not await cell.count():
-            cell = cal.locator("td:not(.disabled) span, td:not(.disabled) button").filter(
-                has_text=day_re
-            ).first
+            cell = body.locator("button, span, div, td").filter(has_text=day_re).first
+        if not await cell.count():
+            cell = cal.locator("button, span, div, td").filter(has_text=day_re).first
         if await cell.count():
             await cell.click(timeout=5000)
             await page.wait_for_timeout(450)
