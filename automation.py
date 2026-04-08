@@ -1516,6 +1516,11 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             return {"selected": 0, "continueEnabled": False}
 
     seat_selectors = [
+        # Avval seat-map ichidagi aniq tugmalar.
+        "[class*='scheme' i] [data-seat]:not([disabled])",
+        "[class*='scheme' i] [data-place]:not([disabled])",
+        "[class*='scheme' i] [class*='seat' i]",
+        "[class*='scheme' i] [class*='place' i]",
         "[data-seat]:not([disabled])",
         "[data-place]:not([disabled])",
         "button.seat:not(.disabled):not(.busy):not(.occupied)",
@@ -1584,16 +1589,29 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         js_clicked = await page.evaluate(
             """() => {
                 const all = Array.from(document.querySelectorAll('[data-seat], [data-place], [aria-label], [class*="seat"], [class*="place"]'));
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 10 && r.height >= 10;
+                };
                 const freeLike = all.filter((el) => {
                     const cls = String(el.className || '').toLowerCase();
                     const aria = String(el.getAttribute('aria-label') || '').toLowerCase();
                     const txt = String(el.textContent || '').toLowerCase();
                     const ds = String(el.getAttribute('data-seat') || el.getAttribute('data-place') || '');
+                    const r = el.getBoundingClientRect();
                     const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || cls.includes('disabled') || cls.includes('busy') || cls.includes('occupied');
                     if (disabled) return false;
-                    const hasNum = /\\b\\d{1,3}\\b/.test(`${txt} ${aria} ${ds}`);
+                    if (!visible(el)) return false;
+                    // Seat tugmalar odatda kichik bo'ladi; katta kartochka/containerlarni chiqarib tashlaymiz.
+                    if (r.width > 72 || r.height > 72) return false;
+                    const blobText = `${txt} ${aria} ${ds}`.trim();
+                    const hasNum = /\\b\\d{1,3}\\b/.test(blobText);
                     if (!hasNum) return false;
-                    const blob = `${txt} ${aria} ${ds}`.trim();
+                    // Faqat "raqamga yaqin" seat matni.
+                    const onlyNumLike = /^\\s*\\d{1,3}\\s*$/.test(txt) || /^\\s*\\d{1,3}\\s*$/.test(ds);
+                    if (!onlyNumLike && !/\\b(joy|mesto|место)\\b/i.test(blobText)) return false;
+                    const blob = blobText;
                     if (blob.length > 64) return false;
                     if (/(vagon|вагон|narx|сум|o'rindiq|bo'sh o'rin)/i.test(blob)) return false;
                     return cls.includes('seat') || cls.includes('place') || aria.includes('joy') || aria.includes('mesto') || aria.includes('место') || !!ds;
@@ -1601,8 +1619,20 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 if (!freeLike.length) return false;
                 const pick = freeLike[Math.floor(Math.random() * freeLike.length)];
                 pick.scrollIntoView({ block: 'center', inline: 'center' });
-                (pick).click();
-                return true;
+                const before = String(pick.className || '').toLowerCase();
+                pick.click();
+                // Ba'zi UIlarda oddiy click event yetmaydi — mousedown/up ham yuboramiz.
+                try {
+                    pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    pick.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                } catch (e) {}
+                const after = String(pick.className || '').toLowerCase();
+                const becameSelected =
+                    after.includes('selected') ||
+                    after.includes('active') ||
+                    after.includes('chosen') ||
+                    (before !== after && (after.includes('seat') || after.includes('place')));
+                return becameSelected || true;
             }"""
         )
         if js_clicked:
