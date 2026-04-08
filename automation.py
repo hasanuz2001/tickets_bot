@@ -185,7 +185,17 @@ async def _select_date_via_calendar_grid(page, bar, date_iso: str) -> bool:
     await page.wait_for_timeout(550)
     cal = page.locator(".bs-datepicker-container").first
     if not await cal.count():
-        cal = page.locator("[class*='bs-datepicker']").filter(has=page.locator("table")).first
+        cal = (
+            page.locator(
+                ".bs-datepicker-container, [class*='bs-datepicker'], [class*='datepicker'], [class*='calendar']"
+            )
+            .filter(has=page.locator("table"))
+            .first
+        )
+    if not await cal.count():
+        cal = page.locator(
+            "xpath=(//*[self::div or self::section][.//table][contains(., '20') and (contains(., 'Aprel') or contains(., 'May') or contains(., 'Yanvar') or contains(., 'Du Se Ch Pa Ju Sh Ya') or contains(., 'Mo Tu We Th Fr Sa Su'))])[1]"
+        ).first
     if not await cal.count():
         logger.warning("[railway][date] grid: konteyner topilmadi")
         await page.keyboard.press("Escape")
@@ -409,12 +419,12 @@ async def _wait_train_results_or_banner(page, timeout_ms: int = 34000) -> str:
 
         if cards > 0 or pb > 0 or tb >= 3:
             return "results"
-        if spin:
-            stable_no_train = 0
-        elif no_tr:
+        if no_tr and cards == 0 and pb == 0 and tb <= 1:
             stable_no_train += 1
-            if stable_no_train >= 5:
+            if stable_no_train >= 6:
                 return "no_trains"
+        elif spin:
+            stable_no_train = max(0, stable_no_train - 1)
         else:
             stable_no_train = 0
 
