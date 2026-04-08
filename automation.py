@@ -1770,6 +1770,104 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             return
     except Exception as ex:
         logger.warning("[buy] js seat fallback xato: %s", ex)
+
+    # Oxirgi fallback: scheme ichidagi raqamli label markazidan real klik targetni topib bosish.
+    # (Ba'zi UIlarda raqam span ichida, haqiqiy click esa tepada joylashgan parentga tushadi.)
+    try:
+        js_click_by_point = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                };
+                const disabledLike = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return (
+                        el.hasAttribute('disabled') ||
+                        el.getAttribute('aria-disabled') === 'true' ||
+                        c.includes('disabled') ||
+                        c.includes('busy') ||
+                        c.includes('occupied') ||
+                        c.includes('sold')
+                    );
+                };
+                const clickableLike = (el) => {
+                    if (!el) return false;
+                    const tag = String(el.tagName || '').toUpperCase();
+                    const cls = String(el.className || '').toLowerCase();
+                    return (
+                        tag === 'BUTTON' ||
+                        tag === 'A' ||
+                        el.getAttribute('role') === 'button' ||
+                        el.hasAttribute('onclick') ||
+                        cls.includes('seat') ||
+                        cls.includes('place')
+                    );
+                };
+                const labels = Array.from(root.querySelectorAll('*')).filter((el) => {
+                    const t = String(el.textContent || '').trim();
+                    if (!/^\\d{1,3}$/.test(t)) return false;
+                    if (!visible(el)) return false;
+                    const r = el.getBoundingClientRect();
+                    // Label katta blok bo'lmasin.
+                    if (r.width > 56 || r.height > 56) return false;
+                    return true;
+                });
+                if (!labels.length) return false;
+                const shuffled = labels.sort(() => Math.random() - 0.5);
+                for (const lb of shuffled) {
+                    const r = lb.getBoundingClientRect();
+                    const x = Math.floor(r.left + r.width / 2);
+                    const y = Math.floor(r.top + r.height / 2);
+                    const stack = Array.from(document.elementsFromPoint(x, y) || []);
+                    // Stackdan eng mantiqli clickable targetni tanlaymiz.
+                    let target = stack.find((el) => clickableLike(el) && visible(el) && !disabledLike(el));
+                    if (!target) {
+                        // elementsFromPoint ichida topilmasa, labelning parentlaridan qidiramiz.
+                        let p = lb;
+                        for (let i = 0; i < 6 && p; i++) {
+                            if (clickableLike(p) && visible(p) && !disabledLike(p)) {
+                                target = p;
+                                break;
+                            }
+                            p = p.parentElement;
+                        }
+                    }
+                    if (!target) continue;
+                    target.scrollIntoView({ block: 'center', inline: 'center' });
+                    const before = String(target.className || '').toLowerCase();
+                    target.click();
+                    try {
+                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    } catch (e) {}
+                    const after = String(target.className || '').toLowerCase();
+                    if (
+                        after.includes('selected') ||
+                        after.includes('active') ||
+                        after.includes('chosen') ||
+                        before !== after
+                    ) {
+                        return true;
+                    }
+                    // UI class o'zgarmasa ham click o'tgan bo'lishi mumkin.
+                    return true;
+                }
+                return false;
+            }"""
+        )
+        if js_click_by_point:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_click_by_point")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js click-by-point fallback xato: %s", ex)
+
     logger.warning("[buy] Avtomatik random joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
 
 
