@@ -1483,13 +1483,44 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             except Exception:
                 continue
 
+    async def _seat_selection_probe() -> dict:
+        try:
+            return await page.evaluate(
+                """() => {
+                    const all = Array.from(document.querySelectorAll('*'));
+                    const cls = (el) => String(el.className || '').toLowerCase();
+                    const visible = (el) => {
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                    };
+                    let selected = 0;
+                    all.forEach((el) => {
+                        const c = cls(el);
+                        const aria = String(el.getAttribute('aria-selected') || el.getAttribute('aria-pressed') || '').toLowerCase();
+                        if (c.includes('selected') || c.includes('active') || c.includes('chosen') || aria === 'true') {
+                            if (visible(el)) selected++;
+                        }
+                    });
+                    const continueLike = all.find((el) => {
+                        const t = String(el.textContent || '').toLowerCase();
+                        if (!visible(el)) return false;
+                        if (!(t.includes("davom") || t.includes("продолж") || t.includes("далее") || t.includes("to'lov") || t.includes("к оплате"))) return false;
+                        if (!(el instanceof HTMLElement)) return false;
+                        return !el.hasAttribute('disabled') && el.getAttribute('aria-disabled') !== 'true';
+                    });
+                    return { selected, continueEnabled: !!continueLike };
+                }"""
+            )
+        except Exception:
+            return {"selected": 0, "continueEnabled": False}
+
     seat_selectors = [
         "[data-seat]:not([disabled])",
         "[data-place]:not([disabled])",
         "button.seat:not(.disabled):not(.busy):not(.occupied)",
         "[class*='Seat']:not([class*='disabled']):not([class*='occupied']):not([class*='busy'])",
         "[class*='seat-free']",
-        "[class*='place']:not([class*='busy']):not([class*='occupied'])",
         "[aria-label*='joy' i], [aria-label*='mesto' i], [aria-label*='место' i]",
     ]
     for sel in seat_selectors:
@@ -1505,6 +1536,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             try:
                 if not await btn.is_visible():
                     continue
+                before = await _seat_selection_probe()
                 # Seat elementini atributlar orqali ham tekshiramiz (text ko'pincha bo'sh bo'ladi).
                 meta = await btn.evaluate(
                     """(el) => {
@@ -1530,10 +1562,20 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 # Joy raqami ko'rinmasa, bu container bo'lish ehtimoli yuqori.
                 if not re.search(r"\b\d{1,3}\b", blob):
                     continue
+                # Juda uzun konteyner matnlari (narx/tavsif) bo'lsa joy sifatida qabul qilmaymiz.
+                if len(blob) > 64:
+                    continue
+                low_blob = blob.lower()
+                if any(x in low_blob for x in ("vagon", "вагон", "narx", "сум", "o'rindiq", "bo'sh o'rin")):
+                    continue
                 await btn.click(timeout=5000)
                 await page.wait_for_timeout(1000)
-                logger.info("[buy] Random joy tanlandi: %s (idx=%s/%s)", sel, idx, cnt)
-                return
+                after = await _seat_selection_probe()
+                if int(after.get("selected") or 0) > int(before.get("selected") or 0) or bool(
+                    after.get("continueEnabled")
+                ):
+                    logger.info("[buy] Random joy tanlandi: %s (idx=%s/%s)", sel, idx, cnt)
+                    return
             except Exception:
                 continue
 
@@ -1551,6 +1593,9 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     if (disabled) return false;
                     const hasNum = /\\b\\d{1,3}\\b/.test(`${txt} ${aria} ${ds}`);
                     if (!hasNum) return false;
+                    const blob = `${txt} ${aria} ${ds}`.trim();
+                    if (blob.length > 64) return false;
+                    if (/(vagon|вагон|narx|сум|o'rindiq|bo'sh o'rin)/i.test(blob)) return false;
                     return cls.includes('seat') || cls.includes('place') || aria.includes('joy') || aria.includes('mesto') || aria.includes('место') || !!ds;
                 });
                 if (!freeLike.length) return false;
@@ -1625,10 +1670,17 @@ async def _click_continue_to_payment(page) -> bool:
         btn = page.get_by_role("button", name=re.compile(re.escape(n), re.I)).first
         if await btn.count():
             try:
+                await btn.scroll_into_view_if_needed()
                 await btn.click(timeout=8000)
                 await page.wait_for_timeout(2000)
                 return True
             except Exception:
+                try:
+                    await btn.click(timeout=8000, force=True)
+                    await page.wait_for_timeout(2000)
+                    return True
+                except Exception:
+                    pass
                 continue
     legacy = page.locator(
         "button:has-text('Продолжить'), button:has-text('Далее'), "
@@ -1637,11 +1689,39 @@ async def _click_continue_to_payment(page) -> bool:
     ).first
     if await legacy.count():
         try:
+            await legacy.scroll_into_view_if_needed()
             await legacy.click(timeout=8000)
             await page.wait_for_timeout(2000)
             return True
         except Exception:
             pass
+    try:
+        js_ok = await page.evaluate(
+            """() => {
+                const all = Array.from(document.querySelectorAll('button, a, [role="button"], [class*="btn"], [class*="button"]'));
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 10 && r.height > 10;
+                };
+                const pick = all.find((el) => {
+                    const t = String(el.textContent || '').toLowerCase();
+                    const c = String(el.className || '').toLowerCase();
+                    const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || c.includes('disabled');
+                    if (disabled || !visible(el)) return false;
+                    return t.includes('davom') || t.includes('продолж') || t.includes('далее') || t.includes("to'lov") || t.includes('к оплате');
+                });
+                if (!pick) return false;
+                pick.scrollIntoView({ block: 'center', inline: 'center' });
+                pick.click();
+                return true;
+            }"""
+        )
+        if js_ok:
+            await page.wait_for_timeout(2000)
+            return True
+    except Exception:
+        pass
     return False
 
 
