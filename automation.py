@@ -1515,6 +1515,39 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         except Exception:
             return {"selected": 0, "continueEnabled": False}
 
+    async def _seat_dom_diag() -> None:
+        """cars-page joy sxemasi bo'yicha qisqa diagnostika (log uchun)."""
+        try:
+            diag = await page.evaluate(
+                """() => {
+                    const root =
+                        document.querySelector('[class*="scheme" i]') ||
+                        document.querySelector('[class*="seat-map" i]') ||
+                        document.body;
+                    const q = (s) => root.querySelectorAll(s).length;
+                    const byPointer = Array.from(root.querySelectorAll('*')).filter((el) => {
+                        const st = window.getComputedStyle(el);
+                        if (st.cursor !== 'pointer') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width >= 8 && r.height >= 8 && r.width <= 90 && r.height <= 90;
+                    }).length;
+                    return {
+                        rootTag: String(root.tagName || '').toLowerCase(),
+                        dataSeat: q('[data-seat]'),
+                        dataPlace: q('[data-place]'),
+                        seatClass: q('[class*="seat" i]'),
+                        placeClass: q('[class*="place" i]'),
+                        svgNodes: q('svg *'),
+                        pointerNodes: byPointer,
+                    };
+                }"""
+            )
+            logger.info("[buy] seat_dom_diag: %s", diag)
+        except Exception as ex:
+            logger.warning("[buy] seat_dom_diag xato: %s", ex)
+
+    await _seat_dom_diag()
+
     seat_selectors = [
         # Avval seat-map ichidagi aniq tugmalar.
         "[class*='scheme' i] [data-seat]:not([disabled])",
@@ -1770,6 +1803,84 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             return
     except Exception as ex:
         logger.warning("[buy] js seat fallback xato: %s", ex)
+
+    # SVG/pointer fallback: matnsiz seat chiplar uchun.
+    try:
+        js_pointer_svg = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                };
+                const disabledLike = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return (
+                        el.hasAttribute('disabled') ||
+                        el.getAttribute('aria-disabled') === 'true' ||
+                        c.includes('disabled') ||
+                        c.includes('busy') ||
+                        c.includes('occupied') ||
+                        c.includes('sold')
+                    );
+                };
+                const seatLike = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    const a = String(el.getAttribute('aria-label') || '').toLowerCase();
+                    const d = String(el.getAttribute('data-seat') || el.getAttribute('data-place') || '').toLowerCase();
+                    return (
+                        c.includes('seat') ||
+                        c.includes('place') ||
+                        a.includes('joy') ||
+                        a.includes('mesto') ||
+                        a.includes('место') ||
+                        !!d
+                    );
+                };
+                const pointer = Array.from(root.querySelectorAll('*')).filter((el) => {
+                    if (!visible(el) || disabledLike(el)) return false;
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 90 || r.height > 90) return false;
+                    if (st.cursor === 'pointer' && seatLike(el)) return true;
+                    // SVG elementlar uchun cursor har doim pointer bo'lmasligi mumkin.
+                    if (el instanceof SVGElement && seatLike(el)) return true;
+                    return false;
+                });
+                if (!pointer.length) return false;
+                const shuffled = pointer.sort(() => Math.random() - 0.5);
+                for (const el of shuffled) {
+                    const r = el.getBoundingClientRect();
+                    const x = Math.floor(r.left + r.width / 2);
+                    const y = Math.floor(r.top + r.height / 2);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                    const top = document.elementFromPoint(x, y);
+                    const target = top || el;
+                    if (!target || !visible(target) || disabledLike(target)) continue;
+                    target.scrollIntoView({ block: 'center', inline: 'center' });
+                    try {
+                        target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+                    } catch (e) {
+                        try { target.click(); } catch (e2) {}
+                    }
+                    return true;
+                }
+                return false;
+            }"""
+        )
+        if js_pointer_svg:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_pointer_svg")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js pointer/svg fallback xato: %s", ex)
 
     # Oxirgi fallback: scheme ichidagi raqamli label markazidan real klik targetni topib bosish.
     # (Ba'zi UIlarda raqam span ichida, haqiqiy click esa tepada joylashgan parentga tushadi.)
