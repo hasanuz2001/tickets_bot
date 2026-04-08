@@ -1882,6 +1882,94 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     except Exception as ex:
         logger.warning("[buy] js pointer/svg fallback xato: %s", ex)
 
+    # Pointer-only fallback: seatLike klass/aria bo'lmasa ham kichik pointer elementlarni sinab ko'ramiz.
+    try:
+        js_pointer_any = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const all = Array.from(root.querySelectorAll('*'));
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
+                };
+                const disabledLike = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return (
+                        el.hasAttribute('disabled') ||
+                        el.getAttribute('aria-disabled') === 'true' ||
+                        c.includes('disabled') ||
+                        c.includes('busy') ||
+                        c.includes('occupied') ||
+                        c.includes('sold')
+                    );
+                };
+                const probe = () => {
+                    let selected = 0;
+                    for (const el of all) {
+                        const c = String(el.className || '').toLowerCase();
+                        const aria = String(el.getAttribute('aria-selected') || el.getAttribute('aria-pressed') || '').toLowerCase();
+                        if ((c.includes('selected') || c.includes('active') || c.includes('chosen') || aria === 'true') && visible(el)) {
+                            selected++;
+                        }
+                    }
+                    const continueEnabled = all.some((el) => {
+                        if (!visible(el)) return false;
+                        const t = String(el.textContent || '').toLowerCase();
+                        if (!(t.includes('davom') || t.includes('продолж') || t.includes('далее') || t.includes("to'lov") || t.includes('к оплате'))) return false;
+                        const c = String(el.className || '').toLowerCase();
+                        return !disabledLike(el) && !c.includes('disabled');
+                    });
+                    return { selected, continueEnabled };
+                };
+
+                const pointer = all.filter((el) => {
+                    if (!visible(el) || disabledLike(el)) return false;
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    // Yirik konteynerlarni chiqaramiz.
+                    if (r.width > 64 || r.height > 64) return false;
+                    if (r.width < 10 || r.height < 10) return false;
+                    return st.cursor === 'pointer' || el instanceof SVGElement;
+                });
+                if (!pointer.length) return false;
+
+                const before = probe();
+                const shuffled = pointer.sort(() => Math.random() - 0.5).slice(0, 24);
+                for (const el of shuffled) {
+                    const r = el.getBoundingClientRect();
+                    const x = Math.floor(r.left + r.width / 2);
+                    const y = Math.floor(r.top + r.height / 2);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+                    const target = document.elementFromPoint(x, y) || el;
+                    if (!target || !visible(target) || disabledLike(target)) continue;
+                    target.scrollIntoView({ block: 'center', inline: 'center' });
+                    try {
+                        target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+                    } catch (e) {
+                        try { target.click(); } catch (e2) {}
+                    }
+
+                    const after = probe();
+                    if (after.selected > before.selected || after.continueEnabled) return true;
+                }
+                return false;
+            }"""
+        )
+        if js_pointer_any:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_pointer_any")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js pointer-any fallback xato: %s", ex)
+
     # Oxirgi fallback: scheme ichidagi raqamli label markazidan real klik targetni topib bosish.
     # (Ba'zi UIlarda raqam span ichida, haqiqiy click esa tepada joylashgan parentga tushadi.)
     try:
