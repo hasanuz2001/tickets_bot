@@ -1484,11 +1484,13 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 continue
 
     seat_selectors = [
+        "[data-seat]:not([disabled])",
+        "[data-place]:not([disabled])",
         "button.seat:not(.disabled):not(.busy):not(.occupied)",
         "[class*='Seat']:not([class*='disabled']):not([class*='occupied']):not([class*='busy'])",
         "[class*='seat-free']",
-        "button[data-seat]:not([disabled])",
         "[class*='place']:not([class*='busy']):not([class*='occupied'])",
+        "[aria-label*='joy' i], [aria-label*='mesto' i], [aria-label*='место' i]",
     ]
     for sel in seat_selectors:
         seats = page.locator(sel)
@@ -1503,12 +1505,30 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             try:
                 if not await btn.is_visible():
                     continue
-                # "place" klasslari ba'zan konteynerlarga ham tushadi; haqiqiy joy odatda raqamli bo'ladi.
-                try:
-                    t = re.sub(r"\s+", "", (await btn.inner_text()) or "")
-                except Exception:
-                    t = ""
-                if t and not re.fullmatch(r"\d{1,3}", t):
+                # Seat elementini atributlar orqali ham tekshiramiz (text ko'pincha bo'sh bo'ladi).
+                meta = await btn.evaluate(
+                    """(el) => {
+                        const txt = (el.textContent || '').trim();
+                        const aria = (el.getAttribute('aria-label') || '').trim();
+                        const ds = (el.getAttribute('data-seat') || '').trim();
+                        const dp = (el.getAttribute('data-place') || '').trim();
+                        const cls = (el.className || '').toString();
+                        const dis = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
+                        return { txt, aria, ds, dp, cls, dis };
+                    }"""
+                )
+                if meta.get("dis"):
+                    continue
+                blob = " ".join(
+                    [
+                        str(meta.get("txt") or ""),
+                        str(meta.get("aria") or ""),
+                        str(meta.get("ds") or ""),
+                        str(meta.get("dp") or ""),
+                    ]
+                ).strip()
+                # Joy raqami ko'rinmasa, bu container bo'lish ehtimoli yuqori.
+                if not re.search(r"\b\d{1,3}\b", blob):
                     continue
                 await btn.click(timeout=5000)
                 await page.wait_for_timeout(1000)
@@ -1516,6 +1536,36 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 return
             except Exception:
                 continue
+
+    # Yakuniy fallback: DOMdan "free seat"ga o'xshash elementni topib JS orqali bosish.
+    try:
+        js_clicked = await page.evaluate(
+            """() => {
+                const all = Array.from(document.querySelectorAll('[data-seat], [data-place], [aria-label], [class*="seat"], [class*="place"]'));
+                const freeLike = all.filter((el) => {
+                    const cls = String(el.className || '').toLowerCase();
+                    const aria = String(el.getAttribute('aria-label') || '').toLowerCase();
+                    const txt = String(el.textContent || '').toLowerCase();
+                    const ds = String(el.getAttribute('data-seat') || el.getAttribute('data-place') || '');
+                    const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || cls.includes('disabled') || cls.includes('busy') || cls.includes('occupied');
+                    if (disabled) return false;
+                    const hasNum = /\\b\\d{1,3}\\b/.test(`${txt} ${aria} ${ds}`);
+                    if (!hasNum) return false;
+                    return cls.includes('seat') || cls.includes('place') || aria.includes('joy') || aria.includes('mesto') || aria.includes('место') || !!ds;
+                });
+                if (!freeLike.length) return false;
+                const pick = freeLike[Math.floor(Math.random() * freeLike.length)];
+                pick.scrollIntoView({ block: 'center', inline: 'center' });
+                (pick).click();
+                return true;
+            }"""
+        )
+        if js_clicked:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_fallback")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js seat fallback xato: %s", ex)
     logger.warning("[buy] Avtomatik random joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
 
 
