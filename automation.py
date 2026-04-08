@@ -1487,7 +1487,11 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         try:
             return await page.evaluate(
                 """() => {
-                    const all = Array.from(document.querySelectorAll('*'));
+                    const root =
+                        document.querySelector('[class*="scheme" i]') ||
+                        document.querySelector('[class*="seat-map" i]') ||
+                        document.body;
+                    const all = Array.from(root.querySelectorAll('*'));
                     const cls = (el) => String(el.className || '').toLowerCase();
                     const visible = (el) => {
                         const st = window.getComputedStyle(el);
@@ -1509,11 +1513,21 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         if (!(el instanceof HTMLElement)) return false;
                         return !el.hasAttribute('disabled') && el.getAttribute('aria-disabled') !== 'true';
                     });
-                    return { selected, continueEnabled: !!continueLike };
+                    const body = String((document.body && document.body.innerText) || '');
+                    const mUz = body.match(/Bosh\\s*o['’]?rindiqlar\\s*:\\s*(\\d{1,3})/i);
+                    const mRu = body.match(/Свободн\\S*\\s*мест\\S*\\s*:\\s*(\\d{1,3})/i);
+                    const freeSeats = Number((mUz && mUz[1]) || (mRu && mRu[1]) || -1);
+                    const low = body.toLowerCase();
+                    const seatWarn =
+                        low.includes("joy tanlamadingiz") ||
+                        low.includes("место не выбра") ||
+                        low.includes("select a seat") ||
+                        low.includes("bosh vagonida joy tanlamadingiz");
+                    return { selected, continueEnabled: !!continueLike, freeSeats, seatWarn };
                 }"""
             )
         except Exception:
-            return {"selected": 0, "continueEnabled": False}
+            return {"selected": 0, "continueEnabled": False, "freeSeats": -1, "seatWarn": False}
 
     async def _seat_dom_diag() -> None:
         """cars-page joy sxemasi bo'yicha qisqa diagnostika (log uchun)."""
@@ -2004,21 +2018,23 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     });
                 }
 
-                // 2) Pointer/SVG kichik tugunlar.
-                const pointer = Array.from(root.querySelectorAll('*')).filter((el) => {
-                    if (!visible(el)) return false;
-                    const st = window.getComputedStyle(el);
-                    const r = el.getBoundingClientRect();
-                    if (!small(r)) return false;
-                    return st.cursor === 'pointer' || el instanceof SVGElement;
-                });
-                for (const el of pointer) {
-                    const r = el.getBoundingClientRect();
-                    points.push({
-                        x: Math.round(r.left + r.width / 2),
-                        y: Math.round(r.top + r.height / 2),
-                        tag: String(el.tagName || '').toLowerCase(),
+                // 2) Agar raqamli tugun bo'lmasa, pointer/SVG kichik tugunlar.
+                if (!points.length) {
+                    const pointer = Array.from(root.querySelectorAll('*')).filter((el) => {
+                        if (!visible(el)) return false;
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        if (!small(r)) return false;
+                        return st.cursor === 'pointer' || el instanceof SVGElement;
                     });
+                    for (const el of pointer) {
+                        const r = el.getBoundingClientRect();
+                        points.push({
+                            x: Math.round(r.left + r.width / 2),
+                            y: Math.round(r.top + r.height / 2),
+                            tag: String(el.tagName || '').toLowerCase(),
+                        });
+                    }
                 }
 
                 // Dublikatlarni chiqaramiz.
@@ -2044,16 +2060,26 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     continue
                 try:
                     await page.mouse.click(x, y)
-                    await page.wait_for_timeout(220)
+                    await page.wait_for_timeout(320)
                     after = await _seat_selection_probe()
-                    if int(after.get("selected") or 0) > int(probe_before.get("selected") or 0) or bool(
-                        after.get("continueEnabled")
-                    ):
+                    before_sel = int(probe_before.get("selected") or 0)
+                    after_sel = int(after.get("selected") or 0)
+                    before_free = int(probe_before.get("freeSeats") or -1)
+                    after_free = int(after.get("freeSeats") or -1)
+                    seat_ok = (
+                        (after_sel > before_sel) or
+                        (before_free >= 0 and after_free >= 0 and after_free < before_free)
+                    )
+                    if seat_ok and not bool(after.get("seatWarn")):
                         logger.info(
-                            "[buy] Random joy tanlandi: mouse_xy (%s,%s) tag=%s",
+                            "[buy] Random joy tanlandi: mouse_xy (%s,%s) tag=%s sel=%s->%s free=%s->%s",
                             x,
                             y,
                             p.get("tag") or "-",
+                            before_sel,
+                            after_sel,
+                            before_free,
+                            after_free,
                         )
                         return
                 except Exception:
