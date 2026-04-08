@@ -6,6 +6,7 @@ Default UI: o'zbekcha (/uz/auth/login, /uz/pages/...). RAILWAY_UI_LANG=ru — ru
 import json
 import logging
 import os
+import random
 import re
 import time
 from datetime import datetime
@@ -1277,40 +1278,100 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
 
 
 async def _pick_car_and_seat(page, car_type: str) -> None:
-    """Vagon turi va birinchi bo'sh joy."""
-    if car_type and str(car_type).strip():
-        ct = str(car_type).strip()
+    """Avval eng arzon tarif/vagon, keyin bo'sh joylardan random bittasi."""
+
+    def _parse_price_sum(raw: str) -> int | None:
+        txt = (raw or "").replace("\u00a0", " ")
+        m = re.findall(r"(\d[\d\s]{2,})\s*(?:so['`ʼ]m|сум)", txt, re.I)
+        if not m:
+            return None
+        digits = re.sub(r"\D", "", m[0] or "")
+        return int(digits) if digits else None
+
+    preferred = (car_type or "").strip().lower()
+    pick_candidates: list[tuple[int, int, int, object]] = []
+    choose_btn = page.locator(
+        "button:has-text('Tanlash'), button:has-text('tanlash'), "
+        "button:has-text('Выбрать'), button:has-text('Tanla')"
+    )
+    btn_count = await choose_btn.count()
+    for i in range(btn_count):
+        btn = choose_btn.nth(i)
+        try:
+            if not await btn.is_visible():
+                continue
+        except Exception:
+            continue
+        try:
+            ctx = btn.locator("xpath=ancestor::*[self::div or self::li or self::article][1]").first
+            txt = await ctx.inner_text()
+        except Exception:
+            txt = await btn.inner_text()
+        price = _parse_price_sum(txt)
+        if price is None:
+            continue
+        # Foydalanuvchi car_type bergan bo'lsa, o'sha turga prioritet beramiz.
+        pref_rank = 0 if (preferred and preferred in txt.lower()) else 1
+        pick_candidates.append((pref_rank, price, i, btn))
+
+    if pick_candidates:
+        pick_candidates.sort(key=lambda x: (x[0], x[1], x[2]))
+        pref_rank, cheapest, idx, best_btn = pick_candidates[0]
+        try:
+            await best_btn.scroll_into_view_if_needed()
+            await best_btn.click(timeout=7000)
+            await page.wait_for_timeout(1100)
+            logger.info(
+                "[buy] Tarif tanlandi: idx=%s narx=%s pref_rank=%s",
+                idx,
+                cheapest,
+                pref_rank,
+            )
+        except Exception as e:
+            logger.warning("[buy] Arzon tarif tugmasini bosib bo'lmadi: %s", e)
+    elif preferred:
+        # Narxni o'qiy olmasak ham so'ralgan vagon turini bosib ko'ramiz.
         for loc in (
-            page.get_by_role("button", name=re.compile(re.escape(ct), re.I)),
-            page.locator(f"button:has-text('{ct}')").first,
-            page.locator(f"text={ct}").first,
+            page.get_by_role("button", name=re.compile(re.escape(preferred), re.I)),
+            page.locator(f"button:has-text('{preferred}')").first,
+            page.locator(f"text={preferred}").first,
         ):
             try:
                 if hasattr(loc, "count") and await loc.count():
                     await loc.click(timeout=5000)
                     await page.wait_for_timeout(900)
+                    logger.info("[buy] So'ralgan vagon turi tanlandi: %s", preferred)
                     break
             except Exception:
                 continue
 
     seat_selectors = [
-        "button.seat:not(.disabled)",
-        "[class*='Seat']:not([class*='disabled']):not([class*='occupied'])",
+        "button.seat:not(.disabled):not(.busy):not(.occupied)",
+        "[class*='Seat']:not([class*='disabled']):not([class*='occupied']):not([class*='busy'])",
         "[class*='seat-free']",
-        "button[data-seat]",
-        "[class*='place']:not([class*='busy'])",
+        "button[data-seat]:not([disabled])",
+        "[class*='place']:not([class*='busy']):not([class*='occupied'])",
     ]
     for sel in seat_selectors:
-        btn = page.locator(sel).first
-        if await btn.count():
+        seats = page.locator(sel)
+        cnt = await seats.count()
+        if not cnt:
+            continue
+        # "Random joy": mavjud joylardan tasodifiy bittasini tanlaymiz.
+        start = random.randrange(cnt)
+        for shift in range(cnt):
+            idx = (start + shift) % cnt
+            btn = seats.nth(idx)
             try:
+                if not await btn.is_visible():
+                    continue
                 await btn.click(timeout=5000)
                 await page.wait_for_timeout(1000)
-                logger.info("[buy] Joy tanlandi: %s", sel)
+                logger.info("[buy] Random joy tanlandi: %s (idx=%s/%s)", sel, idx, cnt)
                 return
             except Exception:
                 continue
-    logger.warning("[buy] Avtomatik joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
+    logger.warning("[buy] Avtomatik random joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
 
 
 async def _fill_passenger(page, passenger: dict) -> None:
