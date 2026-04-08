@@ -1184,9 +1184,16 @@ def _train_number_match_variants(raw: str) -> list[str]:
     return out
 
 
-async def _click_buy_for_train(page, train_number: str) -> bool:
+async def _click_buy_for_train(
+    page,
+    train_number: str,
+    dep_time: str = "",
+    arr_time: str = "",
+) -> bool:
     """Tanlangan poyezd qatoridagi sotib olish tugmasi (RU/UZ)."""
     tnum = str(train_number).strip()
+    dep = str(dep_time or "").strip()[:5]
+    arr = str(arr_time or "").strip()[:5]
     if not tnum:
         return False
 
@@ -1289,6 +1296,48 @@ async def _click_buy_for_train(page, train_number: str) -> bool:
             except Exception as ex:
                 logger.warning("[buy][click_train] fallback click xato idx=%s err=%s", i, ex)
                 continue
+
+        if dep and arr:
+            logger.info("[buy][click_train] vaqt fallback: %s -> %s", dep, arr)
+            time_buttons = page.locator(
+                "button:has-text('Poyezdni tanlash'), button:has-text('poyezdni tanlash'), "
+                "button:has-text('Купить'), button:has-text('Sotib'), button:has-text('Xarid')"
+            )
+            tcnt = await time_buttons.count()
+            for i in range(tcnt):
+                btn = time_buttons.nth(i)
+                try:
+                    if not await btn.is_visible():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    ctx = btn.locator(
+                        "xpath=ancestor::*[self::div or self::li or self::article or self::section][1]"
+                    ).first
+                    ctx_txt = await ctx.inner_text()
+                except Exception:
+                    ctx_txt = ""
+                low = (ctx_txt or "").lower()
+                if not low:
+                    continue
+                if dep in low and arr in low:
+                    try:
+                        await btn.scroll_into_view_if_needed()
+                        await btn.click(timeout=12000)
+                        await page.wait_for_timeout(2200)
+                        await _log_railway_ui_snapshot(
+                            page, "click_buy_after_click_time_fallback"
+                        )
+                        logger.info("[buy][click_train] vaqt fallback orqali bosildi: idx=%s", i)
+                        return True
+                    except Exception as ex:
+                        logger.warning(
+                            "[buy][click_train] vaqt fallback click xato idx=%s err=%s",
+                            i,
+                            ex,
+                        )
+                        continue
 
         logger.warning("[buy] Poyezd №%s topilmadi (qidiruv: %s)", tnum, variants[:6])
         await _log_railway_ui_snapshot(page, "click_buy_train_not_found")
@@ -1515,6 +1564,8 @@ async def open_ticket_page(
     to_code: str,
     date: str,
     train_number: str,
+    dep_time: str = "",
+    arr_time: str = "",
     from_name: str = "",
     to_name: str = "",
 ) -> dict:
@@ -1565,7 +1616,9 @@ async def open_ticket_page(
             clicked = False
             if outcome == "results":
                 await _ensure_train_list_shows_target_date(page, (date or "").strip()[:10])
-                clicked = await _click_buy_for_train(page, train_number)
+                clicked = await _click_buy_for_train(
+                    page, train_number, dep_time=dep_time, arr_time=arr_time
+                )
             elif outcome == "no_trains":
                 logger.info("[open_ticket] Tanlangan sanada poyezd yo'q (banner)")
             else:
@@ -1611,6 +1664,8 @@ async def buy_ticket(
     to_name: str,
     date: str,
     train_number: str,
+    dep_time: str,
+    arr_time: str,
     car_type: str,
     passenger: dict,
 ) -> dict:
@@ -1699,8 +1754,15 @@ async def buy_ticket(
             await _ensure_train_list_shows_target_date(page, (date or "").strip()[:10])
             await _log_railway_ui_snapshot(page, "buy_ticket_after_date_ensure")
 
-            logger.info("[buy_ticket][5/6] _click_buy_for_train(%r)", train_number)
-            if not await _click_buy_for_train(page, train_number):
+            logger.info(
+                "[buy_ticket][5/6] _click_buy_for_train(%r, dep=%s, arr=%s)",
+                train_number,
+                dep_time,
+                arr_time,
+            )
+            if not await _click_buy_for_train(
+                page, train_number, dep_time=dep_time, arr_time=arr_time
+            ):
                 scr = await page.screenshot(full_page=True)
                 st = await _get_train_page_state(page)
                 nc = int(st.get("cards") or 0)
@@ -1779,6 +1841,8 @@ async def send_booking_notification(
         to_code=sub["to_code"],
         date=sub["date"],
         train_number=train["number"],
+        dep_time=train.get("dep") or "",
+        arr_time=train.get("arr") or "",
         from_name=sub.get("from_name") or "",
         to_name=sub.get("to_name") or "",
     )

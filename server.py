@@ -1025,6 +1025,8 @@ async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseReque
             to_name      = req.to_name,
             date         = req.date,
             train_number = req.train_number,
+            dep_time     = req.dep_time,
+            arr_time     = req.arr_time,
             car_type     = req.car_type,
             passenger    = passenger,
         )
