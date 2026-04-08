@@ -84,6 +84,172 @@ _UZ_MONTH_NAMES: dict[int, tuple[str, ...]] = {
     12: ("Dekabr", "dekabr"),
 }
 
+# Natijalar sahifasidagi kun tablari: «Sesh 07 apr», «10 apr»
+_TAB_MONTH: dict[int, tuple[str, ...]] = {
+    1: ("yan", "jan"),
+    2: ("fev", "feb"),
+    3: ("mar",),
+    4: ("apr", "aprel"),
+    5: ("may",),
+    6: ("iyun", "jun"),
+    7: ("iyul", "jul"),
+    8: ("avg", "aug"),
+    9: ("sen", "sep"),
+    10: ("okt", "oct"),
+    11: ("noy", "nov"),
+    12: ("dek", "dec"),
+}
+
+
+def _parse_calendar_head_month_year(text: str) -> tuple[int, int] | None:
+    """BS datepicker sarlavhasi: «Aprel 2026» / «April 2026»."""
+    raw = (text or "").replace("\u00a0", " ")
+    m_y = re.search(r"(20\d{2})", raw)
+    if not m_y:
+        return None
+    y = int(m_y.group(1))
+    low = raw.lower()
+    for mo, names in _UZ_MONTH_NAMES.items():
+        for nm in names:
+            if nm.lower() in low:
+                return (mo, y)
+    ru_m = (
+        ("январ", 1),
+        ("феврал", 2),
+        ("март", 3),
+        ("апрел", 4),
+        ("мая", 5),
+        ("июн", 6),
+        ("июл", 7),
+        ("август", 8),
+        ("сентябр", 9),
+        ("октябр", 10),
+        ("ноябр", 11),
+        ("декабр", 12),
+    )
+    for prefix, mo in ru_m:
+        if prefix in low:
+            return (mo, y)
+    en_m = (
+        ("january", 1),
+        ("february", 2),
+        ("march", 3),
+        ("april", 4),
+        ("may", 5),
+        ("june", 6),
+        ("july", 7),
+        ("august", 8),
+        ("september", 9),
+        ("october", 10),
+        ("november", 11),
+        ("december", 12),
+    )
+    for name, mo in en_m:
+        if name in low:
+            return (mo, y)
+    return None
+
+
+async def _select_date_via_calendar_grid(page, bar, date_iso: str) -> bool:
+    """
+    Matn maydoniga yozmasdan — kalendar ochiladi, oy/yilga o'tiladi, kunning raqamiga bosiladi.
+    (vis_sync dagi birinchi topilgan input 10→8 ga buzishni oldini oladi.)
+    """
+    d_iso = (date_iso or "").strip()[:10]
+    try:
+        dt = datetime.strptime(d_iso, "%Y-%m-%d")
+    except ValueError:
+        return False
+    months_re = (
+        r"Yanvar|Fevral|Mart|Aprel|May|Iyun|Iyul|Avgust|Sentyabr|Oktyabr|Noyabr|Dekabr|"
+        r"yanvar|fevral|mart|aprel|may|iyun|iyul|avgust|sentyabr|oktyabr|noyabr|dekabr|"
+        r"январ|феврал|март|апрел|мая|июн|июл|август|сентябр|октябр|ноябр|декабр"
+    )
+    pat = re.compile(rf"\d{{1,2}}[\s\u00a0]+({months_re})", re.I)
+    opened = False
+    for root in (bar, page.locator("body")):
+        trig = root.get_by_text(pat).first
+        if not await trig.count():
+            continue
+        try:
+            await trig.scroll_into_view_if_needed()
+            await trig.click(timeout=5000, force=True)
+            opened = True
+            logger.info("[railway][date] grid: sana matni bosildi")
+            break
+        except Exception as e:
+            logger.warning("[railway][date] grid ochish: %s", e)
+    if not opened:
+        return False
+
+    await page.wait_for_timeout(550)
+    cal = page.locator(".bs-datepicker-container").first
+    if not await cal.count():
+        cal = page.locator("[class*='bs-datepicker']").filter(has=page.locator("table")).first
+    if not await cal.count():
+        logger.warning("[railway][date] grid: konteyner topilmadi")
+        await page.keyboard.press("Escape")
+        return False
+
+    prev_b = cal.locator("button.previous, .previous, .bs-datepicker-navigation-previous").first
+    next_b = cal.locator("button.next, .next, .bs-datepicker-navigation-next").first
+    if not await prev_b.count() or not await next_b.count():
+        hb = cal.locator(".bs-datepicker-head button, thead button")
+        hc = await hb.count()
+        if hc >= 3:
+            prev_b = hb.nth(0)
+            next_b = hb.nth(hc - 1)
+
+    for _ in range(28):
+        head = cal.locator(".bs-datepicker-head, thead").first
+        title = ""
+        try:
+            title = await head.inner_text()
+        except Exception:
+            pass
+        cur = _parse_calendar_head_month_year(title)
+        if cur == (dt.month, dt.year):
+            break
+        cm, cy = cur if cur else (None, None)
+        try:
+            if cm is None or cy is None:
+                await next_b.click(timeout=3500)
+            elif cy < dt.year or (cy == dt.year and cm < dt.month):
+                await next_b.click(timeout=3500)
+            else:
+                await prev_b.click(timeout=3500)
+        except Exception as e:
+            logger.warning("[railway][date] grid nav: %s", e)
+            break
+        await page.wait_for_timeout(280)
+    else:
+        logger.warning("[railway][date] grid: oy navigatsiyasi limit")
+        await page.keyboard.press("Escape")
+        return False
+
+    day_re = re.compile(rf"^{dt.day}$")
+    try:
+        body = cal.locator(".bs-datepicker-body, tbody").first
+        cell = body.locator("td:not(.disabled):not(.is-other-month) span, td:not(.disabled):not(.is-other-month) button").filter(
+            has_text=day_re
+        ).first
+        if not await cell.count():
+            cell = cal.locator("td:not(.disabled) span, td:not(.disabled) button").filter(
+                has_text=day_re
+            ).first
+        if await cell.count():
+            await cell.click(timeout=5000)
+            await page.wait_for_timeout(450)
+            await _resync_search_trains_input2(page, d_iso)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
+            logger.info("[railway][date] grid: kun %s tanlandi", dt.day)
+            return True
+    except Exception as e:
+        logger.warning("[railway][date] grid kun: %s", e)
+    await page.keyboard.press("Escape")
+    return False
+
 
 def _search_bar_reflects_date_iso(bar_text: str, date_iso: str) -> bool:
     """«10 Aprel» kabi matn maqsad sanaga (YYYY-MM-DD) mos keladimi."""
@@ -112,26 +278,111 @@ async def _bar_inner_text_compact(bar) -> str:
         return ""
 
 
+def _results_heading_matches_date(body: str, date_iso: str) -> bool:
+    """«07 APREL, 2026» / «10 apr» — ro'yxat qaysi kun uchun yuklangan."""
+    raw = (date_iso or "").strip()[:10]
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return True
+    t = body or ""
+    if re.search(rf"\b{dt.day}\s+APREL\s*,\s*{dt.year}\b", t, re.I):
+        return True
+    for name in _UZ_MONTH_NAMES.get(dt.month, ()):
+        if re.search(rf"\b{dt.day}\s+{re.escape(name)}\b", t, re.I):
+            return True
+    for suf in _TAB_MONTH.get(dt.month, ()):
+        if re.search(rf"\b{dt.day}\s+{re.escape(suf)}\b", t, re.I):
+            return True
+    return False
+
+
+async def _click_results_date_tab(page, date_iso: str) -> bool:
+    raw = (date_iso or "").strip()[:10]
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return False
+    d = dt.day
+    for suf in _TAB_MONTH.get(dt.month, ("apr",)):
+        pat = re.compile(rf"\b{d}\s+{re.escape(suf)}\b", re.I)
+        loc = (
+            page.locator(
+                "button, a, [role='tab'], [class*='swiper-slide'], div[role='button'], span[role='button']"
+            )
+            .filter(has_text=pat)
+            .first
+        )
+        try:
+            if await loc.count():
+                await loc.scroll_into_view_if_needed()
+                await loc.click(timeout=6000)
+                logger.info("[railway][date] natijalar kun tabi: %s %s", d, suf)
+                await page.wait_for_timeout(400)
+                return True
+        except Exception as e:
+            logger.warning("[railway][date] tab %s: %s", suf, e)
+    return False
+
+
+async def _ensure_train_list_shows_target_date(page, date_iso: str) -> None:
+    if not (date_iso or "").strip():
+        return
+    d_iso = date_iso.strip()[:10]
+    try:
+        body = await page.inner_text("body")
+    except Exception:
+        return
+    if _results_heading_matches_date(body, d_iso):
+        logger.info("[railway][date] natija sarlavhasi maqsad sanaga mos")
+        return
+    logger.info("[railway][date] boshqa kun uchun ro'yxat — tab orqali %s", d_iso)
+    if await _click_results_date_tab(page, d_iso):
+        await page.wait_for_timeout(2000)
+        await _dismiss_railway_overlays(page)
+
+
 async def _get_train_page_state(page) -> dict:
     try:
         return await page.evaluate(
             """() => {
                 const body = (document.body && document.body.innerText) || '';
                 const cards = document.querySelectorAll('.result-card').length;
+                let purchaseButtons = 0;
+                try {
+                    document.querySelectorAll('button').forEach((b) => {
+                        const t = (b.textContent || '');
+                        if (/Poyezdni tanlash|поездни танлаш|Выбрать поезд/i.test(t)) purchaseButtons++;
+                    });
+                } catch (e) {}
                 const noTrain = /mavjud\\s+emas|rsatilgan\\s+sanada|поезд.*нет|нет\\s+поездов/i.test(body);
                 const spin = !!document.querySelector(
                     ".mat-progress-spinner, [class*='mat-progress'], [class*='spinner']"
                 );
-                return { cards, noTrain, spin };
+                let trainBlocks = 0;
+                try {
+                    document.querySelectorAll("[class*='train']").forEach((el) => {
+                        const c = String(el.className || '');
+                        if (c && !c.includes('search-trains')) trainBlocks++;
+                    });
+                } catch (e) {}
+                return { cards, purchaseButtons, trainBlocks, noTrain, spin };
             }"""
         )
     except Exception:
-        return {"cards": 0, "noTrain": False, "spin": False}
+        return {
+            "cards": 0,
+            "purchaseButtons": 0,
+            "trainBlocks": 0,
+            "noTrain": False,
+            "spin": False,
+        }
 
 
 async def _wait_train_results_or_banner(page, timeout_ms: int = 34000) -> str:
     """
-    .result-card paydo bo'lguncha yoki barqaror «poyezd yo'q» + spinner yo'q.
+    .result-card, «Poyezdni tanlash», yoki yetarli poyezd bloklari (barcha joylar band bo'lsa ham).
+    Yoki barqaror «mavjud emas».
     Qaytaradi: 'results' | 'no_trains' | 'timeout'
     """
     t0 = time.monotonic()
@@ -140,14 +391,23 @@ async def _wait_train_results_or_banner(page, timeout_ms: int = 34000) -> str:
     while True:
         st = await _get_train_page_state(page)
         cards = int(st.get("cards") or 0)
+        pb = int(st.get("purchaseButtons") or 0)
+        tb = int(st.get("trainBlocks") or 0)
         no_tr = bool(st.get("noTrain"))
         spin = bool(st.get("spin"))
-        key = (cards, no_tr, spin)
+        key = (cards, pb, tb, no_tr, spin)
         if key != last_key:
             last_key = key
-            logger.info("[buy_ticket][wait] cards=%s noTrain=%s spin=%s", cards, no_tr, spin)
+            logger.info(
+                "[buy_ticket][wait] cards=%s purchaseButtons=%s trainBlocks=%s noTrain=%s spin=%s",
+                cards,
+                pb,
+                tb,
+                no_tr,
+                spin,
+            )
 
-        if cards > 0:
+        if cards > 0 or pb > 0 or tb >= 3:
             return "results"
         if spin:
             stable_no_train = 0
@@ -194,6 +454,25 @@ async def _angular_set_input_value(locator, value: str) -> bool:
         return True
     except Exception:
         return False
+
+
+async def _resync_search_trains_input2(page, date_iso: str) -> None:
+    """Yashirin input[2] — Angular DD-MM-YYYY va DD.MM.YYYY."""
+    d_iso = (date_iso or "").strip()[:10]
+    if not d_iso:
+        return
+    dotted = _iso_to_railway_dotted(d_iso)
+    dmy = _iso_to_railway_dmy(d_iso)
+    bar = page.locator("[class*='search-trains']").first
+    if not await bar.count():
+        return
+    ins = bar.locator("input")
+    if await ins.count() < 3:
+        return
+    el = ins.nth(2)
+    for v in (dmy, dotted):
+        await _angular_set_input_value(el, v)
+        await page.wait_for_timeout(120)
 
 
 async def _read_input_value_safe(locator) -> str:
@@ -317,10 +596,15 @@ async def _log_railway_ui_snapshot(page, step: str) -> None:
         logger.warning("[railway][ui_snapshot] step=%s xato=%s", step, e)
 
 
-async def _fill_date_via_calendar_trigger(page, bar, dotted: str) -> bool:
+async def _fill_date_via_calendar_trigger(page, bar, date_iso: str) -> bool:
     """
-    Sana matni ('07 Aprel' / NBSP) — bosiladi, keyin popup yoki klaviatura bilan DD.MM.YYYY.
+    Sana matni ('07 Aprel') — bosiladi; popupda avval DD-MM-YYYY (10-04-2026), keyin DD.MM.YYYY.
+    Nuqta bilan yozish ba'zan noto'g'ri parse bo'lib bugungi kunga qaytadi.
     """
+    d_iso = (date_iso or "").strip()[:10]
+    dotted = _iso_to_railway_dotted(d_iso)
+    dmy = _iso_to_railway_dmy(d_iso)
+    try_formats = [dmy, dotted]
     months_re = (
         r"Yanvar|Fevral|Mart|Aprel|May|Iyun|Iyul|Avgust|Sentyabr|Oktyabr|Noyabr|Dekabr|"
         r"yanvar|fevral|mart|aprel|may|iyun|iyul|avgust|sentyabr|oktyabr|noyabr|dekabr|"
@@ -357,22 +641,26 @@ async def _fill_date_via_calendar_trigger(page, bar, dotted: str) -> bool:
         loc = page.locator(sel).first
         if not await loc.count():
             continue
-        try:
-            vis = await loc.is_visible()
-            await loc.fill(dotted, timeout=5000, force=not vis)
-            await _angular_set_input_value(loc, dotted)
-            await page.keyboard.press("Enter")
-            await page.wait_for_timeout(450)
-            logger.info("[railway] kalendar popup: %s", sel)
-            return True
-        except Exception:
-            continue
+        for value_try in try_formats:
+            try:
+                vis = await loc.is_visible()
+                await loc.click(timeout=3000, force=True)
+                await loc.fill(value_try, timeout=5000, force=not vis)
+                await _angular_set_input_value(loc, value_try)
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(500)
+                await _resync_search_trains_input2(page, d_iso)
+                logger.info("[railway] kalendar popup: %s | val=%s", sel, value_try)
+                return True
+            except Exception:
+                continue
     try:
         await page.keyboard.press("Control+a")
-        await page.keyboard.type(dotted, delay=85)
+        await page.keyboard.type(dmy, delay=85)
         await page.keyboard.press("Enter")
-        await page.wait_for_timeout(450)
-        logger.info("[railway] kalendar ochilgach klaviatura bilan sana")
+        await page.wait_for_timeout(500)
+        await _resync_search_trains_input2(page, d_iso)
+        logger.info("[railway] kalendar klaviatura: %s", dmy)
         return True
     except Exception:
         return False
@@ -509,18 +797,24 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             inner = fields.nth(2).locator("input").first
             await try_locator("form__field[2]", inner)
 
-    # 5) Kalendar matni — input bo'sh qolganda yoki hali OK emas
+    # 5) Kalendar — avval grid (kun bosish), keyin matn/input fallback
     if not date_ok:
-        logger.info("[railway][date] qadam 5/5: kalendar trigger")
-        if await _fill_date_via_calendar_trigger(page, bar, dotted):
-            pick_reason = (pick_reason + "+" if pick_reason else "") + "calendar"
+        logger.info("[railway][date] qadam 5/5: kalendar (grid, keyin typing)")
+        if await _select_date_via_calendar_grid(page, bar, d_iso):
+            pick_reason = (pick_reason + "+" if pick_reason else "") + "calendar_grid"
             date_ok = True
             if n_all >= 3:
                 v2 = await _read_input_value_safe(all_inp.nth(2))
-                logger.info("[railway] kalendar keyin input[2]: %r", v2[:120])
+                logger.info("[railway] grid keyin input[2]: %r", v2[:120])
+        elif await _fill_date_via_calendar_trigger(page, bar, d_iso):
+            pick_reason = (pick_reason + "+" if pick_reason else "") + "calendar_type"
+            date_ok = True
+            if n_all >= 3:
+                v2 = await _read_input_value_safe(all_inp.nth(2))
+                logger.info("[railway] kalendar typing keyin input[2]: %r", v2[:120])
         else:
             logger.warning(
-                "[railway] sana o'rnatilmadi — kalendar trigger yoki popup ishlamadi."
+                "[railway] sana o'rnatilmadi — kalendar grid/typing ishlamadi."
             )
 
     logger.info(
@@ -542,17 +836,21 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
         bar_txt[:200],
     )
     if not reflects:
-        logger.info("[railway][date] ko'rinadigan sana farq qiladi — kalendar sinxron")
-        if await _fill_date_via_calendar_trigger(page, bar, dotted):
-            pick_reason = f"{pick_reason}+vis_sync" if pick_reason else "vis_sync"
+        logger.info(
+            "[railway][date] bar matn yashirin inputdan farq qiladi — grid (typing emas)"
+        )
+        if await _select_date_via_calendar_grid(page, bar, d_iso):
+            pick_reason = f"{pick_reason}+grid_sync" if pick_reason else "grid_sync"
             if n_all >= 3:
                 v2 = await _read_input_value_safe(all_inp.nth(2))
-                logger.info("[railway][date] vis_sync keyin input[2]: %r", v2[:120])
+                logger.info("[railway][date] grid_sync keyin input[2]: %r", v2[:120])
         else:
-            logger.warning("[railway][date] vis_sync (kalendar) ishlamadi")
+            logger.warning(
+                "[railway][date] grid_sync ishlamadi — Izlashdan keyin natijalar tabi ishlatiladi"
+            )
         bar_txt = await _bar_inner_text_compact(bar)
         logger.info(
-            "[railway][date] vis_sync keyin moslik: %s | %s",
+            "[railway][date] grid_sync keyin bar mosligi: %s | %s",
             _search_bar_reflects_date_iso(bar_txt, d_iso),
             bar_txt[:200],
         )
@@ -570,6 +868,7 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             logger.info("[railway][date] Izlash bosildi (search-trains paneli), 2.8s kutish")
             await page.wait_for_timeout(2800)
             await _log_railway_ui_snapshot(page, "after_izlash_wait")
+            await _ensure_train_list_shows_target_date(page, d_iso)
             return
         except Exception as ex:
             logger.warning("[railway] Izlash bosishda xato: %s", ex)
@@ -582,11 +881,13 @@ async def _type_trains_search_date_and_research(page, date_iso: str) -> None:
             logger.info("[railway][date] Izlash bosildi (legacy selector), 2.8s kutish")
             await page.wait_for_timeout(2800)
             await _log_railway_ui_snapshot(page, "after_izlash_wait_legacy")
+            await _ensure_train_list_shows_target_date(page, d_iso)
         except Exception as ex:
             logger.warning("[railway] legacy Izlash: %s", ex)
     else:
         logger.warning("[railway] Izlash tugmasi search-trains ichida topilmadi")
         await _log_railway_ui_snapshot(page, "izlash_button_missing")
+        await _ensure_train_list_shows_target_date(page, d_iso)
 
 
 async def _open_trains_search(
@@ -1125,9 +1426,22 @@ async def open_ticket_page(
 
             await _open_trains_search(page, from_code, to_code, from_name, to_name, date)
 
-            outcome = await _wait_train_results_or_banner(page, 28000)
+            outcome = await _wait_train_results_or_banner(page, 34000)
+            if outcome == "timeout":
+                st_rec = await _get_train_page_state(page)
+                pb = int(st_rec.get("purchaseButtons") or 0)
+                tb = int(st_rec.get("trainBlocks") or 0)
+                if pb > 0 or tb >= 3:
+                    logger.info(
+                        "[open_ticket] vaqt tugadi, lekin ro'yxat izlari: purchaseButtons=%s trainBlocks=%s",
+                        pb,
+                        tb,
+                    )
+                    outcome = "results"
+
             clicked = False
             if outcome == "results":
+                await _ensure_train_list_shows_target_date(page, (date or "").strip()[:10])
                 clicked = await _click_buy_for_train(page, train_number)
             elif outcome == "no_trains":
                 logger.info("[open_ticket] Tanlangan sanada poyezd yo'q (banner)")
@@ -1223,6 +1537,17 @@ async def buy_ticket(
                 "[buy_ticket][3/6] qidiruv natijasi: .result-card yoki barqaror «mavjud emas» (~34s)"
             )
             outcome = await _wait_train_results_or_banner(page, 34000)
+            if outcome == "timeout":
+                st_rec = await _get_train_page_state(page)
+                pb = int(st_rec.get("purchaseButtons") or 0)
+                tb = int(st_rec.get("trainBlocks") or 0)
+                if pb > 0 or tb >= 3:
+                    logger.info(
+                        "[buy_ticket] vaqt tugadi, lekin ro'yxat izlari: purchaseButtons=%s trainBlocks=%s",
+                        pb,
+                        tb,
+                    )
+                    outcome = "results"
             await _log_railway_ui_snapshot(page, f"buy_ticket_wait_{outcome}")
             logger.info("[buy_ticket][4/6] kutish natijasi: %s", outcome)
 
@@ -1247,6 +1572,9 @@ async def buy_ticket(
                     ),
                     "screenshot": scr,
                 }
+
+            await _ensure_train_list_shows_target_date(page, (date or "").strip()[:10])
+            await _log_railway_ui_snapshot(page, "buy_ticket_after_date_ensure")
 
             logger.info("[buy_ticket][5/6] _click_buy_for_train(%r)", train_number)
             if not await _click_buy_for_train(page, train_number):
