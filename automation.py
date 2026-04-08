@@ -1586,6 +1586,63 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
 
     # Yakuniy fallback: DOMdan "free seat"ga o'xshash elementni topib JS orqali bosish.
     try:
+        # Avval seat-map ichidagi kichik, raqamli seat chiplarni topamiz.
+        js_precise = await page.evaluate(
+            """() => {
+                const root =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 10 && r.height >= 10;
+                };
+                const isDisabled = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    const dis = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
+                    return dis || c.includes('disabled') || c.includes('busy') || c.includes('occupied') || c.includes('sold');
+                };
+                const all = Array.from(root.querySelectorAll('button, div, span, a'));
+                const candidates = all.filter((el) => {
+                    if (!visible(el) || isDisabled(el)) return false;
+                    const r = el.getBoundingClientRect();
+                    // Seat chiplar odatda kichik bo'ladi.
+                    if (r.width > 70 || r.height > 70) return false;
+                    const txt = String(el.textContent || '').trim();
+                    if (!/^\\d{1,3}$/.test(txt)) return false;
+                    const c = String(el.className || '').toLowerCase();
+                    const aria = String(el.getAttribute('aria-label') || '').toLowerCase();
+                    const seatLike =
+                        c.includes('seat') ||
+                        c.includes('place') ||
+                        c.includes('chair') ||
+                        aria.includes('joy') ||
+                        aria.includes('mesto') ||
+                        aria.includes('место');
+                    return seatLike;
+                });
+                if (!candidates.length) return false;
+                const pick = candidates[Math.floor(Math.random() * candidates.length)];
+                pick.scrollIntoView({ block: 'center', inline: 'center' });
+                const before = String(pick.className || '').toLowerCase();
+                pick.click();
+                try {
+                    pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    pick.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                } catch (e) {}
+                const after = String(pick.className || '').toLowerCase();
+                return after.includes('selected') || after.includes('active') || after.includes('chosen') || before !== after;
+            }"""
+        )
+        if js_precise:
+            await page.wait_for_timeout(900)
+            logger.info("[buy] Random joy tanlandi: js_precise_numeric")
+            return
+    except Exception as ex:
+        logger.warning("[buy] js precise seat fallback xato: %s", ex)
+
+    try:
         js_clicked = await page.evaluate(
             """() => {
                 const all = Array.from(document.querySelectorAll('[data-seat], [data-place], [aria-label], [class*="seat"], [class*="place"]'));
@@ -1993,25 +2050,29 @@ async def buy_ticket(
             await _fill_passenger(page, passenger)
             await page.wait_for_timeout(600)
 
-            await _click_continue_to_payment(page)
-            await page.wait_for_timeout(1200)
-            # Cars-page da qolib ketgan bo'lsa (masalan "joy tanlamadingiz"), yana bir marta tanlab bosamiz.
-            cur_url = (page.url or "").lower()
-            if "/cars-page" in cur_url:
+            # Cars-pagedan chiqmaguncha bir necha marta seat+continue qilamiz.
+            for attempt in range(3):
+                await _click_continue_to_payment(page)
+                await page.wait_for_timeout(1200)
+                cur_url = (page.url or "").lower()
+                if "/cars-page" not in cur_url:
+                    break
                 try:
                     body_now = (await page.inner_text("body") or "").lower()
                 except Exception:
                     body_now = ""
-                if (
+                seat_warn = (
                     "joy tanlamadingiz" in body_now
                     or "место не выбра" in body_now
                     or "select a seat" in body_now
-                    or True
-                ):
-                    logger.info("[buy] cars-page da qoldi: joyni qayta tanlab davom etish retry")
-                    await _pick_car_and_seat(page, car_type or "")
-                    await page.wait_for_timeout(500)
-                    await _click_continue_to_payment(page)
+                )
+                logger.info(
+                    "[buy] cars-page da qoldi (attempt=%s, seat_warn=%s): joyni qayta tanlash retry",
+                    attempt + 1,
+                    seat_warn,
+                )
+                await _pick_car_and_seat(page, car_type or "")
+                await page.wait_for_timeout(600)
 
             screenshot = await page.screenshot(full_page=False)
             final_url = page.url
