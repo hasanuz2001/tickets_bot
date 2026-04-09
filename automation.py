@@ -2206,6 +2206,68 @@ async def _fill_passenger(page, passenger: dict) -> None:
         bool(citizenship),
     )
 
+    async def _open_passenger_block_if_needed() -> None:
+        # Ba'zi sahifalarda yo'lovchi forma "kiritish" tugmasi bosilgandan keyin ochiladi.
+        targets = (
+            "Yo'lovchilar haqida ma'lumot",
+            "ma'lumotlaringizni kiriting",
+            "ma'lumot kirit",
+            "yo'lovchi",
+            "kiriting",
+            "Пассажир",
+            "введите данные",
+            "добавить",
+            "Add passenger",
+        )
+        for t in targets:
+            for loc in (
+                page.get_by_role("button", name=re.compile(re.escape(t), re.I)),
+                page.get_by_role("link", name=re.compile(re.escape(t), re.I)),
+                page.locator(f"text={t}"),
+            ):
+                try:
+                    c = await loc.count()
+                except Exception:
+                    c = 0
+                if not c:
+                    continue
+                for i in range(min(c, 3)):
+                    el = loc.nth(i)
+                    try:
+                        await el.scroll_into_view_if_needed()
+                        await el.click(timeout=1500)
+                        await page.wait_for_timeout(220)
+                    except Exception:
+                        continue
+
+    async def _diag_passenger_fields() -> None:
+        try:
+            d = await page.evaluate(
+                """() => {
+                    const vis = (el) => {
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 6 && r.height > 6;
+                    };
+                    const all = Array.from(document.querySelectorAll('input, select, textarea'));
+                    const v = all.filter(vis);
+                    const sample = v.slice(0, 12).map((el) => ({
+                        tag: String(el.tagName || '').toLowerCase(),
+                        type: String(el.getAttribute('type') || '').toLowerCase(),
+                        name: String(el.getAttribute('name') || ''),
+                        fc: String(el.getAttribute('formcontrolname') || ''),
+                        ph: String(el.getAttribute('placeholder') || ''),
+                    }));
+                    return { all: all.length, visible: v.length, sample };
+                }"""
+            )
+            logger.info("[buy] passenger_fields_diag: %s", d)
+        except Exception as ex:
+            logger.warning("[buy] passenger_fields_diag xato: %s", ex)
+
+    await _open_passenger_block_if_needed()
+    await _diag_passenger_fields()
+
     async def _fill_by_selectors(value: str, selectors: list[str], label: str) -> bool:
         if not value:
             return False
@@ -2217,9 +2279,12 @@ async def _fill_passenger(page, passenger: dict) -> None:
             for i in range(min(cnt, 6)):
                 el = loc.nth(i)
                 try:
+                    try:
+                        await el.scroll_into_view_if_needed()
+                    except Exception:
+                        pass
                     if not await el.is_visible():
                         continue
-                    await el.scroll_into_view_if_needed()
                     try:
                         await el.click(timeout=1500)
                     except Exception:
@@ -2251,10 +2316,15 @@ async def _fill_passenger(page, passenger: dict) -> None:
             "input[placeholder*='ФИО' i]",
             "input[placeholder*='Имя' i]",
             "input[placeholder*='ism' i]",
+            "input[autocomplete='name']",
+            "input[name*='first' i]",
+            "input[name*='last' i]",
             "input[name*='full' i][name*='name' i]",
             "input[name*='fio' i]",
             "input[name*='name' i]",
             "input[formcontrolname*='name' i]",
+            "input[formcontrolname*='first' i]",
+            "input[formcontrolname*='last' i]",
             "input[type='text']",
         ],
         "full_name",
@@ -2267,6 +2337,8 @@ async def _fill_passenger(page, passenger: dict) -> None:
             "input[placeholder*='passport' i]",
             "input[name*='passport' i]",
             "input[name*='doc' i]",
+            "input[name*='serial' i]",
+            "input[name*='number' i]",
             "input[formcontrolname*='pass' i]",
             "input[formcontrolname*='document' i]",
         ],
