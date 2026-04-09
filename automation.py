@@ -2193,41 +2193,90 @@ async def _fill_passenger(page, passenger: dict) -> None:
     name = (passenger.get("full_name") or "").strip()
     passport = (passenger.get("passport") or "").strip()
     phone = (passenger.get("phone") or "").strip()
+    logger.info(
+        "[buy] Passenger profile: name=%s passport=%s phone=%s",
+        bool(name),
+        bool(passport),
+        bool(phone),
+    )
 
-    for loc in (
-        page.locator("input[placeholder*='Имя' i], input[placeholder*='ФИО' i], input[name*='name' i]"),
-        page.locator("input[type='text']").filter(has_not=page.locator("[type='password']")),
-    ):
-        if await loc.count() and name:
-            try:
-                await loc.first.fill(name, timeout=5000)
-                break
-            except Exception:
-                pass
+    async def _fill_by_selectors(value: str, selectors: list[str], label: str) -> bool:
+        if not value:
+            return False
+        for sel in selectors:
+            loc = page.locator(sel)
+            cnt = await loc.count()
+            if not cnt:
+                continue
+            for i in range(min(cnt, 6)):
+                el = loc.nth(i)
+                try:
+                    if not await el.is_visible():
+                        continue
+                    await el.scroll_into_view_if_needed()
+                    try:
+                        await el.click(timeout=1500)
+                    except Exception:
+                        pass
+                    try:
+                        await el.fill(value, timeout=3500)
+                    except Exception:
+                        # Maskali inputlar uchun type fallback
+                        try:
+                            await el.press("Control+A", timeout=1200)
+                        except Exception:
+                            pass
+                        await el.type(value, delay=20, timeout=3500)
+                    try:
+                        await el.dispatch_event("input")
+                        await el.dispatch_event("change")
+                    except Exception:
+                        pass
+                    logger.info("[buy] Passenger filled: %s via %s[%s]", label, sel, i)
+                    return True
+                except Exception:
+                    continue
+        logger.warning("[buy] Passenger field not filled: %s", label)
+        return False
 
-    for sel in (
-        "input[placeholder*='Серия' i], input[placeholder*='Паспорт' i], input[name*='passport' i]",
-        "input[placeholder*='passport' i]",
-    ):
-        el = page.locator(sel).first
-        if await el.count() and passport:
-            try:
-                await el.fill(passport, timeout=5000)
-                break
-            except Exception:
-                pass
-
-    for sel in (
-        "input[type='tel']",
-        "input[placeholder*='Телефон' i], input[placeholder*='phone' i]",
-    ):
-        el = page.locator(sel).first
-        if await el.count() and phone:
-            try:
-                await el.fill(phone, timeout=5000)
-                break
-            except Exception:
-                pass
+    await _fill_by_selectors(
+        name,
+        [
+            "input[placeholder*='ФИО' i]",
+            "input[placeholder*='Имя' i]",
+            "input[placeholder*='ism' i]",
+            "input[name*='full' i][name*='name' i]",
+            "input[name*='fio' i]",
+            "input[name*='name' i]",
+            "input[formcontrolname*='name' i]",
+            "input[type='text']",
+        ],
+        "full_name",
+    )
+    await _fill_by_selectors(
+        passport,
+        [
+            "input[placeholder*='Паспорт' i]",
+            "input[placeholder*='Серия' i]",
+            "input[placeholder*='passport' i]",
+            "input[name*='passport' i]",
+            "input[name*='doc' i]",
+            "input[formcontrolname*='pass' i]",
+            "input[formcontrolname*='document' i]",
+        ],
+        "passport",
+    )
+    await _fill_by_selectors(
+        phone,
+        [
+            "input[type='tel']",
+            "input[placeholder*='Телефон' i]",
+            "input[placeholder*='phone' i]",
+            "input[name*='phone' i]",
+            "input[formcontrolname*='phone' i]",
+        ],
+        "phone",
+    )
 
 
 async def _click_continue_to_payment(page) -> bool:
