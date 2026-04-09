@@ -1275,11 +1275,14 @@ async function saveProfile() {
   const phone    = document.getElementById("inputPhone").value.trim();
   const birthDate = document.getElementById("inputBirthDate").value || null;
   const gender = document.getElementById("inputGender").value || null;
-  const citizenship = document.getElementById("inputCitizenship").value.trim().toUpperCase() || null;
+  const citizenship = document.getElementById("inputCitizenship").value || null;
 
   if (!fullName) { showToast("⚠️ To'liq ismni kiriting"); return; }
   if (passport.length < 6) { showToast("⚠️ Passport raqamini to'g'ri kiriting"); return; }
   if (!phone.startsWith("+")) { showToast("⚠️ Telefon: +998... formatida kiriting"); return; }
+  if (!birthDate) { showToast("⚠️ Tug'ilgan sanani kiriting"); return; }
+  if (!gender) { showToast("⚠️ Jinsni tanlang"); return; }
+  if (!citizenship) { showToast("⚠️ Fuqarolikni tanlang"); return; }
 
   showLoading(true, "Saqlanmoqda...");
   try {

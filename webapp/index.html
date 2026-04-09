@@ -259,13 +259,13 @@
     </div>
 
     <div class="form-section">
-      <label class="form-label">Tug'ilgan sana (ixtiyoriy)</label>
+      <label class="form-label">Tug'ilgan sana</label>
       <input class="form-input" id="inputBirthDate"
              type="date" />
     </div>
 
     <div class="form-section">
-      <label class="form-label">Jins (ixtiyoriy)</label>
+      <label class="form-label">Jins</label>
       <select class="form-input" id="inputGender">
         <option value="">Tanlanmagan</option>
         <option value="male">Erkak</option>
@@ -274,10 +274,31 @@
     </div>
 
     <div class="form-section">
-      <label class="form-label">Fuqarolik (ixtiyoriy)</label>
-      <input class="form-input" id="inputCitizenship"
-             type="text" placeholder="Masalan: UZB"
-             autocomplete="off" />
+      <label class="form-label">Fuqarolik</label>
+      <select class="form-input" id="inputCitizenship">
+        <option value="">Tanlanmagan</option>
+        <option value="UZB">O'zbekiston (UZB)</option>
+        <option value="KAZ">Qozog'iston (KAZ)</option>
+        <option value="KGZ">Qirg'iziston (KGZ)</option>
+        <option value="TJK">Tojikiston (TJK)</option>
+        <option value="TKM">Turkmaniston (TKM)</option>
+        <option value="RUS">Rossiya (RUS)</option>
+        <option value="AZE">Ozarbayjon (AZE)</option>
+        <option value="ARM">Armaniston (ARM)</option>
+        <option value="GEO">Gruziya (GEO)</option>
+        <option value="TUR">Turkiya (TUR)</option>
+        <option value="CHN">Xitoy (CHN)</option>
+        <option value="KOR">Janubiy Koreya (KOR)</option>
+        <option value="JPN">Yaponiya (JPN)</option>
+        <option value="IND">Hindiston (IND)</option>
+        <option value="ARE">BAA (ARE)</option>
+        <option value="SAU">Saudiya Arabistoni (SAU)</option>
+        <option value="DEU">Germaniya (DEU)</option>
+        <option value="FRA">Fransiya (FRA)</option>
+        <option value="ITA">Italiya (ITA)</option>
+        <option value="GBR">Buyuk Britaniya (GBR)</option>
+        <option value="USA">AQSH (USA)</option>
+      </select>
     </div>
 
     <button class="profile-save-btn" onclick="saveProfile()">
@@ -300,6 +321,6 @@
   <!-- ===== TOAST ===== -->
   <div class="toast" id="toast"></div>
 
-  <script src="app.js?v=20260409a"></script>
+  <script src="app.js?v=20260409b"></script>
 </body>
 </html>
