@@ -1253,6 +1253,9 @@ async function loadProfile() {
     document.getElementById("inputFullName").value = p.full_name || "";
     document.getElementById("inputPassport").value = p.passport  || "";
     document.getElementById("inputPhone").value    = p.phone     || "";
+    document.getElementById("inputBirthDate").value = p.birth_date || "";
+    document.getElementById("inputGender").value = p.gender || "";
+    document.getElementById("inputCitizenship").value = p.citizenship || "";
     document.getElementById("profileAvatar").textContent = "✅";
     document.getElementById("profileSavedInfo").style.display = "";
     document.getElementById("profileDot").style.display = "";
@@ -1270,6 +1273,9 @@ async function saveProfile() {
   const fullName = document.getElementById("inputFullName").value.trim().toUpperCase();
   const passport = document.getElementById("inputPassport").value.trim().toUpperCase();
   const phone    = document.getElementById("inputPhone").value.trim();
+  const birthDate = document.getElementById("inputBirthDate").value || null;
+  const gender = document.getElementById("inputGender").value || null;
+  const citizenship = document.getElementById("inputCitizenship").value.trim().toUpperCase() || null;
 
   if (!fullName) { showToast("⚠️ To'liq ismni kiriting"); return; }
   if (passport.length < 6) { showToast("⚠️ Passport raqamini to'g'ri kiriting"); return; }
@@ -1284,6 +1290,9 @@ async function saveProfile() {
         full_name: fullName,
         passport:  passport,
         phone:     phone,
+        birth_date: birthDate,
+        gender: gender,
+        citizenship: citizenship,
       }),
     });
     document.getElementById("profileAvatar").textContent = "✅";

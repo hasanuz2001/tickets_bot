@@ -76,6 +76,9 @@ def init_db():
                 full_name   TEXT NOT NULL,
                 passport    TEXT NOT NULL,
                 phone       TEXT NOT NULL,
+                birth_date  TEXT,
+                gender      TEXT,
+                citizenship TEXT,
                 updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
@@ -111,6 +114,15 @@ def init_db():
         ]:
             try:
                 conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col}")
+            except Exception:
+                pass
+        for col in [
+            "birth_date TEXT",
+            "gender TEXT",
+            "citizenship TEXT",
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE passenger_info ADD COLUMN {col}")
             except Exception:
                 pass
         conn.commit()
@@ -855,20 +867,34 @@ class PassengerRequest(BaseModel):
     full_name: str
     passport:  str
     phone:     str
+    birth_date: str | None = None
+    gender: str | None = None
+    citizenship: str | None = None
 
 
 @app.post("/api/passenger")
 async def save_passenger(req: PassengerRequest):
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO passenger_info (user_id, full_name, passport, phone)
-               VALUES (?,?,?,?)
+            """INSERT INTO passenger_info (user_id, full_name, passport, phone, birth_date, gender, citizenship)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET
                  full_name=excluded.full_name,
                  passport=excluded.passport,
                  phone=excluded.phone,
+                 birth_date=excluded.birth_date,
+                 gender=excluded.gender,
+                 citizenship=excluded.citizenship,
                  updated_at=datetime('now')""",
-            (req.user_id, req.full_name, req.passport, req.phone),
+            (
+                req.user_id,
+                req.full_name,
+                req.passport,
+                req.phone,
+                req.birth_date,
+                req.gender,
+                req.citizenship,
+            ),
         )
         conn.commit()
     return {"status": "ok"}

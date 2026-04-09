@@ -2193,11 +2193,17 @@ async def _fill_passenger(page, passenger: dict) -> None:
     name = (passenger.get("full_name") or "").strip()
     passport = (passenger.get("passport") or "").strip()
     phone = (passenger.get("phone") or "").strip()
+    birth_date = (passenger.get("birth_date") or "").strip()  # kutilgan format: YYYY-MM-DD
+    gender = (passenger.get("gender") or "").strip().lower()
+    citizenship = (passenger.get("citizenship") or "").strip()
     logger.info(
-        "[buy] Passenger profile: name=%s passport=%s phone=%s",
+        "[buy] Passenger profile: name=%s passport=%s phone=%s birth=%s gender=%s citizen=%s",
         bool(name),
         bool(passport),
         bool(phone),
+        bool(birth_date),
+        bool(gender),
+        bool(citizenship),
     )
 
     async def _fill_by_selectors(value: str, selectors: list[str], label: str) -> bool:
@@ -2276,6 +2282,89 @@ async def _fill_passenger(page, passenger: dict) -> None:
             "input[formcontrolname*='phone' i]",
         ],
         "phone",
+    )
+    # Tug'ilgan sana: ko'p formalarda date input yoki DOB/Birth nomi bilan bo'ladi.
+    if birth_date:
+        dob = birth_date
+        m = re.match(r"^(\\d{4})-(\\d{2})-(\\d{2})$", birth_date)
+        dob_dotted = f"{m.group(3)}.{m.group(2)}.{m.group(1)}" if m else birth_date
+        ok_dob = await _fill_by_selectors(
+            dob,
+            [
+                "input[type='date']",
+                "input[name*='birth' i]",
+                "input[name*='dob' i]",
+                "input[placeholder*='туғил' i], input[placeholder*='рожден' i], input[placeholder*='birth' i]",
+                "input[formcontrolname*='birth' i]",
+            ],
+            "birth_date",
+        )
+        if not ok_dob and dob_dotted != dob:
+            await _fill_by_selectors(
+                dob_dotted,
+                [
+                    "input[name*='birth' i]",
+                    "input[name*='dob' i]",
+                    "input[placeholder*='туғил' i], input[placeholder*='рожден' i], input[placeholder*='birth' i]",
+                    "input[formcontrolname*='birth' i]",
+                ],
+                "birth_date_dotted",
+            )
+
+    # Jins: select/radio variantlarini qo'llab-quvvatlash.
+    if gender in ("male", "female"):
+        try:
+            js_gender = await page.evaluate(
+                """(g) => {
+                    const labels = {
+                        male: ["male", "erkak", "муж", "мужской", "m"],
+                        female: ["female", "ayol", "жен", "женский", "f"],
+                    };
+                    const wanted = labels[g] || [];
+                    const all = Array.from(document.querySelectorAll('select, input[type="radio"], button, [role="radio"]'));
+                    const vis = (el) => {
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 6 && r.height > 6;
+                    };
+                    // 1) select
+                    for (const s of all.filter(el => el.tagName === 'SELECT')) {
+                        const opts = Array.from(s.options || []);
+                        const hit = opts.find(o => wanted.some(w => String(o.value || '').toLowerCase().includes(w) || String(o.textContent || '').toLowerCase().includes(w)));
+                        if (hit) {
+                            s.value = hit.value;
+                            s.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                    }
+                    // 2) radio/button
+                    for (const el of all) {
+                        if (!vis(el)) continue;
+                        const t = `${el.getAttribute('value') || ''} ${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`.toLowerCase();
+                        if (!wanted.some(w => t.includes(w))) continue;
+                        el.click();
+                        return true;
+                    }
+                    return false;
+                }""",
+                gender,
+            )
+            if js_gender:
+                logger.info("[buy] Passenger filled: gender=%s", gender)
+            else:
+                logger.warning("[buy] Passenger field not filled: gender")
+        except Exception:
+            logger.warning("[buy] Passenger gender fill xato")
+
+    await _fill_by_selectors(
+        citizenship,
+        [
+            "input[name*='citizen' i]",
+            "input[name*='nation' i]",
+            "input[placeholder*='fuqaro' i], input[placeholder*='гражд' i], input[placeholder*='citizen' i]",
+            "input[formcontrolname*='citizen' i]",
+        ],
+        "citizenship",
     )
 
 

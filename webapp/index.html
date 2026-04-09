@@ -234,7 +234,7 @@
   <div class="screen" id="screenProfile">
     <div class="profile-card">
       <div class="profile-avatar" id="profileAvatar">👤</div>
-      <p class="profile-hint">Chipta xarid qilish uchun passport ma'lumotlarini kiriting</p>
+      <p class="profile-hint">Chipta xarid qilish uchun yo'lovchi ma'lumotlarini kiriting (ba'zi reyslarda qo'shimcha maydonlar talab qilinadi)</p>
     </div>
 
     <div class="form-section">
@@ -258,6 +258,28 @@
              autocomplete="tel" />
     </div>
 
+    <div class="form-section">
+      <label class="form-label">Tug'ilgan sana (ixtiyoriy)</label>
+      <input class="form-input" id="inputBirthDate"
+             type="date" />
+    </div>
+
+    <div class="form-section">
+      <label class="form-label">Jins (ixtiyoriy)</label>
+      <select class="form-input" id="inputGender">
+        <option value="">Tanlanmagan</option>
+        <option value="male">Erkak</option>
+        <option value="female">Ayol</option>
+      </select>
+    </div>
+
+    <div class="form-section">
+      <label class="form-label">Fuqarolik (ixtiyoriy)</label>
+      <input class="form-input" id="inputCitizenship"
+             type="text" placeholder="Masalan: UZB"
+             autocomplete="off" />
+    </div>
+
     <button class="profile-save-btn" onclick="saveProfile()">
       💾 Saqlash
     </button>
@@ -278,6 +300,6 @@
   <!-- ===== TOAST ===== -->
   <div class="toast" id="toast"></div>
 
-  <script src="app.js?v=20260408b"></script>
+  <script src="app.js?v=20260409a"></script>
 </body>
 </html>
