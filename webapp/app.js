@@ -267,16 +267,34 @@ function renderSearchHistory() {
   wrap.style.display = "";
   box.innerHTML = state.searchHistory.map((h, i) => {
     const t = (h.timeFrom || h.timeTo) ? ` · ${h.timeFrom || "00:00"}-${h.timeTo || "23:59"}` : "";
+    const trainBrandText = (h.trainBrandCsv && h.trainBrandCsv !== "all")
+      ? ` · 🚄 ${trainBrandCsvLabelFromServer(h.trainBrandCsv)}`
+      : "";
+    const comfortText = (h.comfortCsv && h.comfortCsv !== "all")
+      ? ` · 🪑 ${comfortCsvLabelFromServer(h.comfortCsv)}`
+      : "";
     return `
-      <button type="button" class="history-item" onclick="applyHistory(${i})">
+      <div class="history-item">
         <div class="history-route">${h.fromName} → ${h.toName}</div>
-        <div class="history-meta">${h.dateLabel || h.date}${t}</div>
-      </button>
+        <div class="history-meta">${h.dateLabel || h.date}${t}${trainBrandText}${comfortText}</div>
+        <div class="history-actions">
+          <button type="button" class="history-action-btn history-action-secondary" onclick="applyHistoryForEdit(${i})">Tahrirlash</button>
+          <button type="button" class="history-action-btn" onclick="applyHistory(${i})">Qayta qidirish</button>
+        </div>
+      </div>
     `;
   }).join("");
 }
 
 async function applyHistory(idx) {
+  await applyHistoryCommon(idx, true);
+}
+
+async function applyHistoryForEdit(idx) {
+  await applyHistoryCommon(idx, false);
+}
+
+async function applyHistoryCommon(idx, autoSearch) {
   const h = state.searchHistory[idx];
   if (!h) return;
   state.fromCode = h.fromCode; state.fromName = h.fromName || stationNameByCode(h.fromCode);
@@ -292,7 +310,13 @@ async function applyHistory(idx) {
   setField("trainBrandValue", trainBrandCsvLabel());
   setField("comfortValue", comfortCsvLabel());
   updateSearchBtn();
-  await doSearch();
+  state.screenStack = ["screenMain"];
+  showScreen("screenMain");
+  if (autoSearch) {
+    await doSearch();
+  } else {
+    showToast("Qidiruv parametrlarini o'zgartiring va 'Qidirish'ni bosing.");
+  }
 }
 
 // ───────────────────────────── NAVIGATION ────────────────────────────────────
