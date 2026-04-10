@@ -1415,6 +1415,23 @@ async def _click_buy_for_train(
     return True
 
 
+def _seat_selection_success(before: dict, after: dict) -> bool:
+    """_seat_selection_probe() natijalari: joy tanlanganini aniqlash."""
+    if bool(after.get("seatWarn")):
+        return False
+    if int(after.get("selected") or 0) > int(before.get("selected") or 0):
+        return True
+    bf = int(before.get("freeSeats") or -1)
+    af = int(after.get("freeSeats") or -1)
+    if bf >= 0 and af >= 0 and af < bf:
+        return True
+    ba = int(before.get("accentShapes") or 0)
+    aa = int(after.get("accentShapes") or 0)
+    if aa > ba:
+        return True
+    return False
+
+
 async def _pick_car_and_seat(page, car_type: str) -> None:
     """Avval eng arzon tarif/vagon, keyin bo'sh joylardan random bittasi."""
 
@@ -1503,9 +1520,52 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     all.forEach((el) => {
                         const c = cls(el);
                         const aria = String(el.getAttribute('aria-selected') || el.getAttribute('aria-pressed') || '').toLowerCase();
-                        if (c.includes('selected') || c.includes('active') || c.includes('chosen') || aria === 'true') {
+                        if (
+                            c.includes('selected') ||
+                            c.includes('active') ||
+                            c.includes('chosen') ||
+                            c.includes('picked') ||
+                            c.includes('current') ||
+                            c.includes('highlight') ||
+                            c.includes('checked') ||
+                            c.includes('pressed') ||
+                            aria === 'true'
+                        ) {
                             if (visible(el)) selected++;
                         }
+                    });
+                    const accentPaint = (v) => {
+                        const s = String(v || '');
+                        if (!s || s === 'none') return false;
+                        const i = s.indexOf('rgb');
+                        if (i < 0) return false;
+                        const o = s.indexOf('(', i);
+                        const cl = s.indexOf(')', o);
+                        if (o < 0 || cl < 0) return false;
+                        const parts = s
+                            .slice(o + 1, cl)
+                            .split(',')
+                            .map((x) => parseInt(String(x).trim(), 10));
+                        if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return false;
+                        const r = parts[0];
+                        const g = parts[1];
+                        const b = parts[2];
+                        if (b >= 130 && b > r + 18) return true;
+                        if (g >= 110 && b >= 90 && r < 95) return true;
+                        return false;
+                    };
+                    let accentShapes = 0;
+                    const scheme =
+                        document.querySelector('[class*="scheme" i]') ||
+                        document.querySelector('[class*="seat-map" i]') ||
+                        root;
+                    Array.from(scheme.querySelectorAll('path, rect, circle, polygon, ellipse')).forEach((el) => {
+                        if (!visible(el)) return;
+                        const r = el.getBoundingClientRect();
+                        const area = r.width * r.height;
+                        if (area < 35 || area > 3600) return;
+                        const st = window.getComputedStyle(el);
+                        if (accentPaint(st.fill) || accentPaint(st.stroke)) accentShapes++;
                     });
                     const continueLike = allDoc.find((el) => {
                         const t = String(el.textContent || '').toLowerCase();
@@ -1524,11 +1584,17 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         low.includes("место не выбра") ||
                         low.includes("select a seat") ||
                         low.includes("bosh vagonida joy tanlamadingiz");
-                    return { selected, continueEnabled: !!continueLike, freeSeats, seatWarn };
+                    return { selected, continueEnabled: !!continueLike, freeSeats, seatWarn, accentShapes };
                 }"""
             )
         except Exception:
-            return {"selected": 0, "continueEnabled": False, "freeSeats": -1, "seatWarn": False}
+            return {
+                "selected": 0,
+                "continueEnabled": False,
+                "freeSeats": -1,
+                "seatWarn": False,
+                "accentShapes": 0,
+            }
 
     async def _seat_dom_diag() -> None:
         """cars-page joy sxemasi bo'yicha qisqa diagnostika (log uchun)."""
@@ -1633,9 +1699,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 await btn.click(timeout=5000)
                 await page.wait_for_timeout(1000)
                 after = await _seat_selection_probe()
-                if int(after.get("selected") or 0) > int(before.get("selected") or 0) or bool(
-                    after.get("continueEnabled")
-                ):
+                if _seat_selection_success(before, after):
                     logger.info("[buy] Random joy tanlandi: %s (idx=%s/%s)", sel, idx, cnt)
                     return
             except Exception:
@@ -2000,14 +2064,6 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
                 };
                 const small = (r) => r.width <= 72 && r.height <= 72 && r.width >= 10 && r.height >= 10;
-                const isGrayLike = (rgb) => {
-                    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/i.exec(String(rgb || ''));
-                    if (!m) return false;
-                    const r = Number(m[1] || 0);
-                    const g = Number(m[2] || 0);
-                    const b = Number(m[3] || 0);
-                    return Math.abs(r - g) <= 14 && Math.abs(g - b) <= 14;
-                };
                 const points = [];
 
                 // 1) Raqamli tugunlar (masalan "14") markazi.
@@ -2017,12 +2073,6 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     if (!visible(el)) return false;
                     const r = el.getBoundingClientRect();
                     if (!small(r)) return false;
-                    const st = window.getComputedStyle(el);
-                    const pst = el.parentElement ? window.getComputedStyle(el.parentElement) : st;
-                    const fg = String(st.color || '');
-                    const bg = String(st.backgroundColor || pst.backgroundColor || '');
-                    // Band joylar odatda xira-kulrang: imkon qadar chiqarib tashlaymiz.
-                    if (isGrayLike(fg) && (isGrayLike(bg) || !bg || bg.includes('0, 0, 0, 0'))) return false;
                     return true;
                 });
                 for (const el of numeric) {
@@ -2069,7 +2119,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             random.shuffle(click_points)
             probe_before = await _seat_selection_probe()
             # Ko'p urinish qilmaymiz: eng ko'pi 24 ta nuqta.
-            for p in click_points[:24]:
+            for p in click_points[:48]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2082,13 +2132,11 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     after_sel = int(after.get("selected") or 0)
                     before_free = int(probe_before.get("freeSeats") or -1)
                     after_free = int(after.get("freeSeats") or -1)
-                    seat_ok = (
-                        (after_sel > before_sel) or
-                        (before_free >= 0 and after_free >= 0 and after_free < before_free)
-                    )
-                    if seat_ok and not bool(after.get("seatWarn")):
+                    before_ac = int(probe_before.get("accentShapes") or 0)
+                    after_ac = int(after.get("accentShapes") or 0)
+                    if _seat_selection_success(probe_before, after):
                         logger.info(
-                            "[buy] Random joy tanlandi: mouse_xy (%s,%s) tag=%s sel=%s->%s free=%s->%s",
+                            "[buy] Random joy tanlandi: mouse_xy (%s,%s) tag=%s sel=%s->%s free=%s->%s ac=%s->%s",
                             x,
                             y,
                             p.get("tag") or "-",
@@ -2096,6 +2144,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                             after_sel,
                             before_free,
                             after_free,
+                            before_ac,
+                            after_ac,
                         )
                         return
                 except Exception:
@@ -2103,11 +2153,12 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     except Exception as ex:
         logger.warning("[buy] mouse_xy seat fallback xato: %s", ex)
 
-    # Oxirgi fallback: scheme ichidagi raqamli label markazidan real klik targetni topib bosish.
-    # (Ba'zi UIlarda raqam span ichida, haqiqiy click esa tepada joylashgan parentga tushadi.)
+    # Oxirgi fallback: bitta JS bilan taxminiy bosish o'rniga probe bilan tekshiruvli sikl.
     try:
-        js_click_by_point = await page.evaluate(
-            """() => {
+        for try_idx in range(40):
+            before_cp = await _seat_selection_probe()
+            clicked = await page.evaluate(
+                """() => {
                 const root =
                     document.querySelector('[class*="scheme" i]') ||
                     document.querySelector('[class*="seat-map" i]') ||
@@ -2130,75 +2181,102 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 };
                 const clickableLike = (el) => {
                     if (!el) return false;
+                    if (disabledLike(el) || !visible(el)) return false;
                     const tag = String(el.tagName || '').toUpperCase();
                     const cls = String(el.className || '').toLowerCase();
-                    return (
-                        tag === 'BUTTON' ||
-                        tag === 'A' ||
-                        el.getAttribute('role') === 'button' ||
-                        el.hasAttribute('onclick') ||
-                        cls.includes('seat') ||
-                        cls.includes('place')
-                    );
+                    if (tag === 'BUTTON' || tag === 'A') return true;
+                    if (el.getAttribute('role') === 'button') return true;
+                    if (el.hasAttribute('onclick')) return true;
+                    if (cls.includes('seat') || cls.includes('place')) return true;
+                    if (el instanceof SVGElement && ['G', 'RECT', 'CIRCLE', 'PATH', 'TSPAN', 'TEXT'].includes(tag)) {
+                        return true;
+                    }
+                    return false;
                 };
                 const labels = Array.from(root.querySelectorAll('*')).filter((el) => {
                     const t = String(el.textContent || '').trim();
                     if (!/^\\d{1,3}$/.test(t)) return false;
                     if (!visible(el)) return false;
                     const r = el.getBoundingClientRect();
-                    // Label katta blok bo'lmasin.
                     if (r.width > 56 || r.height > 56) return false;
                     return true;
                 });
                 if (!labels.length) return false;
-                const shuffled = labels.sort(() => Math.random() - 0.5);
-                for (const lb of shuffled) {
-                    const r = lb.getBoundingClientRect();
-                    const x = Math.floor(r.left + r.width / 2);
-                    const y = Math.floor(r.top + r.height / 2);
-                    const stack = Array.from(document.elementsFromPoint(x, y) || []);
-                    // Stackdan eng mantiqli clickable targetni tanlaymiz.
-                    let target = stack.find((el) => clickableLike(el) && visible(el) && !disabledLike(el));
-                    if (!target) {
-                        // elementsFromPoint ichida topilmasa, labelning parentlaridan qidiramiz.
-                        let p = lb;
-                        for (let i = 0; i < 6 && p; i++) {
-                            if (clickableLike(p) && visible(p) && !disabledLike(p)) {
-                                target = p;
-                                break;
-                            }
-                            p = p.parentElement;
+                const lb = labels[Math.floor(Math.random() * labels.length)];
+                const r = lb.getBoundingClientRect();
+                const x = Math.floor(r.left + r.width / 2);
+                const y = Math.floor(r.top + r.height / 2);
+                const stack = Array.from(document.elementsFromPoint(x, y) || []);
+                let target = stack.find((el) => clickableLike(el));
+                if (!target) {
+                    let p = lb;
+                    for (let i = 0; i < 8 && p; i++) {
+                        if (clickableLike(p)) {
+                            target = p;
+                            break;
                         }
+                        p = p.parentElement;
                     }
-                    if (!target) continue;
-                    target.scrollIntoView({ block: 'center', inline: 'center' });
-                    const before = String(target.className || '').toLowerCase();
-                    target.click();
-                    try {
-                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    } catch (e) {}
-                    const after = String(target.className || '').toLowerCase();
-                    if (
-                        after.includes('selected') ||
-                        after.includes('active') ||
-                        after.includes('chosen') ||
-                        before !== after
-                    ) {
-                        return true;
-                    }
-                    // UI class o'zgarmasa, bu nuqta seat emas deb hisoblaymiz.
-                    continue;
                 }
-                return false;
+                if (!target) return false;
+                target.scrollIntoView({ block: 'center', inline: 'center' });
+                try {
+                    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }));
+                    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }));
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+                } catch (e) {
+                    try { target.click(); } catch (e2) { return false; }
+                }
+                return true;
             }"""
-        )
-        if js_click_by_point:
-            await page.wait_for_timeout(900)
-            logger.info("[buy] Random joy tanlandi: js_click_by_point")
-            return
+            )
+            if not clicked:
+                break
+            await page.wait_for_timeout(500)
+            after_cp = await _seat_selection_probe()
+            if _seat_selection_success(before_cp, after_cp):
+                logger.info("[buy] Random joy tanlandi: js_click_by_point try=%s", try_idx)
+                return
     except Exception as ex:
         logger.warning("[buy] js click-by-point fallback xato: %s", ex)
+
+    # SVG ichidagi raqamli label (text/tspan) — Playwright + mouse.
+    try:
+        sch = page.locator("[class*='scheme' i]").first
+        if await sch.count() > 0:
+            tiles = sch.locator("svg text, svg tspan").filter(
+                has_text=re.compile(r"^[1-9]\d{0,2}$")
+            )
+            tc = await tiles.count()
+            if tc:
+                order = list(range(tc))
+                random.shuffle(order)
+                for idx in order[: min(tc, 55)]:
+                    before_pl = await _seat_selection_probe()
+                    el = tiles.nth(idx)
+                    try:
+                        await el.scroll_into_view_if_needed()
+                        box = await el.bounding_box()
+                        if box:
+                            await page.mouse.click(
+                                box["x"] + box["width"] / 2,
+                                box["y"] + box["height"] / 2,
+                            )
+                        else:
+                            await el.click(timeout=3500, force=True)
+                    except Exception:
+                        continue
+                    await page.wait_for_timeout(450)
+                    after_pl = await _seat_selection_probe()
+                    if _seat_selection_success(before_pl, after_pl):
+                        logger.info(
+                            "[buy] Random joy tanlandi: playwright_svg_label idx=%s/%s",
+                            idx,
+                            tc,
+                        )
+                        return
+    except Exception as ex:
+        logger.warning("[buy] playwright svg label seat xato: %s", ex)
 
     logger.warning("[buy] Avtomatik random joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
 
