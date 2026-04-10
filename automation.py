@@ -1417,17 +1417,18 @@ async def _click_buy_for_train(
 
 def _seat_selection_success(before: dict, after: dict) -> bool:
     """_seat_selection_probe() natijalari: joy tanlanganini aniqlash."""
-    if bool(after.get("seatWarn")):
-        return False
-    if int(after.get("selected") or 0) > int(before.get("selected") or 0):
-        return True
+    sel_up = int(after.get("selected") or 0) > int(before.get("selected") or 0)
     bf = int(before.get("freeSeats") or -1)
     af = int(after.get("freeSeats") or -1)
-    if bf >= 0 and af >= 0 and af < bf:
-        return True
+    free_down = bf >= 0 and af >= 0 and af < bf
     ba = int(before.get("accentShapes") or 0)
     aa = int(after.get("accentShapes") or 0)
-    if aa > ba:
+    accent_up = aa > ba
+    # Kuchli signal: ogohlantirish matni butun body bo'yicha noto'g'ri bo'lishi mumkin.
+    if sel_up or free_down:
+        return True
+    # Accent: faqat aniq alert/toast ichidagi xato bo'lsa bloklaymiz.
+    if accent_up and not bool(after.get("seatWarnStrict")):
         return True
     return False
 
@@ -1579,12 +1580,37 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     const mRu = body.match(/Свободн\\S*\\s*мест\\S*\\s*:\\s*(\\d{1,3})/i);
                     const freeSeats = Number((mUz && mUz[1]) || (mRu && mRu[1]) || -1);
                     const low = body.toLowerCase();
+                    // Faqat xato/alert kontekstida (butun bodyda "tanlang" so'zi bilan aralashmasin).
                     const seatWarn =
                         low.includes("joy tanlamadingiz") ||
                         low.includes("место не выбра") ||
                         low.includes("select a seat") ||
                         low.includes("bosh vagonida joy tanlamadingiz");
-                    return { selected, continueEnabled: !!continueLike, freeSeats, seatWarn, accentShapes };
+                    const seatWarnStrict = (() => {
+                        const needles = [
+                            "joy tanlamadingiz",
+                            "место не выбра",
+                            "select a seat",
+                            "bosh vagonida joy tanlamadingiz",
+                        ];
+                        const boxes = Array.from(
+                            document.querySelectorAll(
+                                '[role="alert"],[class*="error" i],[class*="invalid" i],[class*="warning" i],[class*="danger" i],[class*="toast" i],[class*="snackbar" i],[class*="notify" i]'
+                            )
+                        );
+                        const blob = boxes
+                            .map((el) => String(el.innerText || "").toLowerCase())
+                            .join(" | ");
+                        return needles.some((n) => blob.includes(n));
+                    })();
+                    return {
+                        selected,
+                        continueEnabled: !!continueLike,
+                        freeSeats,
+                        seatWarn,
+                        seatWarnStrict,
+                        accentShapes,
+                    };
                 }"""
             )
         except Exception:
@@ -1593,6 +1619,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 "continueEnabled": False,
                 "freeSeats": -1,
                 "seatWarn": False,
+                "seatWarnStrict": False,
                 "accentShapes": 0,
             }
 
@@ -1628,6 +1655,84 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             logger.warning("[buy] seat_dom_diag xato: %s", ex)
 
     await _seat_dom_diag()
+
+    try:
+        p0 = await _seat_selection_probe()
+        logger.info("[buy] seat_probe_initial: %s", p0)
+    except Exception:
+        pass
+
+    # Angular ko'pincha har bir joy uchun <svg><g> ichida raqam beradi — to'g'ridan-to'g'ri g markaziga click.
+    try:
+        click_pts = await page.evaluate(
+            """() => {
+                const scheme =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 4 && r.height >= 4;
+                };
+                const badCls = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return (
+                        c.includes('disabled') ||
+                        c.includes('occupied') ||
+                        c.includes('busy') ||
+                        c.includes('sold') ||
+                        c.includes('unavailable')
+                    );
+                };
+                const pts = [];
+                const svgs = Array.from(scheme.querySelectorAll('svg'));
+                for (const svg of svgs) {
+                    for (const g of svg.querySelectorAll('g')) {
+                        if (!visible(g) || badCls(g)) continue;
+                        const t = String(g.textContent || '')
+                            .replace(/\\s+/g, ' ')
+                            .trim();
+                        if (!/^\\d{1,3}$/.test(t)) continue;
+                        const r = g.getBoundingClientRect();
+                        if (r.width > 130 || r.height > 130) continue;
+                        pts.push({
+                            x: Math.round(r.left + r.width / 2),
+                            y: Math.round(r.top + r.height / 2),
+                        });
+                    }
+                }
+                const seen = new Set();
+                const uniq = [];
+                for (const p of pts) {
+                    const k = `${p.x}:${p.y}`;
+                    if (seen.has(k)) continue;
+                    seen.add(k);
+                    uniq.push(p);
+                }
+                return uniq;
+            }"""
+        )
+        if click_pts:
+            logger.info("[buy] svg_seat_g_targets: %s ta nuqta", len(click_pts))
+            random.shuffle(click_pts)
+            for p in click_pts[: min(len(click_pts), 90)]:
+                x = int(p.get("x") or 0)
+                y = int(p.get("y") or 0)
+                if x <= 0 or y <= 0:
+                    continue
+                before_g = await _seat_selection_probe()
+                try:
+                    await page.mouse.click(x, y)
+                except Exception:
+                    continue
+                await page.wait_for_timeout(400)
+                after_g = await _seat_selection_probe()
+                if _seat_selection_success(before_g, after_g):
+                    logger.info("[buy] Random joy tanlandi: svg_g_mouse (%s,%s)", x, y)
+                    return
+    except Exception as ex:
+        logger.warning("[buy] svg g seat click xato: %s", ex)
 
     seat_selectors = [
         # Avval seat-map ichidagi aniq tugmalar.
