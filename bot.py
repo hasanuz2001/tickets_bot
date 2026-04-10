@@ -76,6 +76,7 @@ STATIONS = {
     "2900880": "Qo'qon",
     "2900920": "Marg'ilon",
     "2900750": "Qarshi",
+    "2900850": "Guliston",
     "2900255": "Termiz",
     "2900790": "Urganch",
     "2900172": "Xiva",

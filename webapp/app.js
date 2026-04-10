@@ -28,6 +28,7 @@ const STATIONS = [
   { code: "2900880", name: "Qo'qon" },
   { code: "2900920", name: "Marg'ilon" },
   { code: "2900750", name: "Qarshi" },
+  { code: "2900850", name: "Guliston" },
   { code: "2900255", name: "Termiz" },
   { code: "2900790", name: "Urganch" },
   { code: "2900172", name: "Xiva" },

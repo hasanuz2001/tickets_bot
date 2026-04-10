@@ -1593,9 +1593,10 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                             "select a seat",
                             "bosh vagonida joy tanlamadingiz",
                         ];
+                        // warning/invalid butun forma bilan keng — noto'g'ri seatWarnStrict.
                         const boxes = Array.from(
                             document.querySelectorAll(
-                                '[role="alert"],[class*="error" i],[class*="invalid" i],[class*="warning" i],[class*="danger" i],[class*="toast" i],[class*="snackbar" i],[class*="notify" i]'
+                                '[role="alert"],[class*="toast" i],[class*="snackbar" i],[class*="notify" i],[class*="mat-snack" i]'
                             )
                         );
                         const blob = boxes
@@ -1662,7 +1663,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     except Exception:
         pass
 
-    # Angular ko'pincha har bir joy uchun <svg><g> ichida raqam beradi — to'g'ridan-to'g'ri g markaziga click.
+    # SVG: raqam ko'pincha bir nechta <tspan>da bo'linadi — g.textContent to'g'ri bo'lmaydi.
     try:
         click_pts = await page.evaluate(
             """() => {
@@ -1685,36 +1686,45 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         c.includes('unavailable')
                     );
                 };
-                const pts = [];
+                const mergedSeatDigits = (g) => {
+                    const bits = Array.from(g.querySelectorAll('text, tspan'))
+                        .map((e) => String(e.textContent || '').replace(/\\s/g, ''))
+                        .filter(Boolean);
+                    const merged = bits.join('');
+                    return /^\\d{1,3}$/.test(merged) ? merged : '';
+                };
+                const candidates = [];
                 const svgs = Array.from(scheme.querySelectorAll('svg'));
                 for (const svg of svgs) {
                     for (const g of svg.querySelectorAll('g')) {
                         if (!visible(g) || badCls(g)) continue;
-                        const t = String(g.textContent || '')
-                            .replace(/\\s+/g, ' ')
-                            .trim();
-                        if (!/^\\d{1,3}$/.test(t)) continue;
+                        const label = mergedSeatDigits(g);
+                        if (!label) continue;
                         const r = g.getBoundingClientRect();
-                        if (r.width > 130 || r.height > 130) continue;
-                        pts.push({
+                        if (r.width > 130 || r.height > 130 || r.width < 4 || r.height < 4) continue;
+                        candidates.push({
                             x: Math.round(r.left + r.width / 2),
                             y: Math.round(r.top + r.height / 2),
+                            area: r.width * r.height,
+                            label,
                         });
                     }
                 }
+                candidates.sort((a, b) => a.area - b.area);
                 const seen = new Set();
                 const uniq = [];
-                for (const p of pts) {
-                    const k = `${p.x}:${p.y}`;
+                for (const c of candidates) {
+                    const k = `${c.x}:${c.y}`;
                     if (seen.has(k)) continue;
                     seen.add(k);
-                    uniq.push(p);
+                    uniq.push({ x: c.x, y: c.y });
                 }
                 return uniq;
             }"""
         )
+        n_g = len(click_pts or [])
+        logger.info("[buy] svg_seat_g_targets: %s ta nuqta (tspan birlashtirilgan)", n_g)
         if click_pts:
-            logger.info("[buy] svg_seat_g_targets: %s ta nuqta", len(click_pts))
             random.shuffle(click_pts)
             for p in click_pts[: min(len(click_pts), 90)]:
                 x = int(p.get("x") or 0)
@@ -1733,6 +1743,64 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     return
     except Exception as ex:
         logger.warning("[buy] svg g seat click xato: %s", ex)
+
+    # Qo'llanma: alohida <text>/<tspan> yoki g bo'lmasa — to'g'ridan matn markaziga.
+    try:
+        label_pts = await page.evaluate(
+            """() => {
+                const scheme =
+                    document.querySelector('[class*="scheme" i]') ||
+                    document.querySelector('[class*="seat-map" i]') ||
+                    document.body;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 2 && r.height >= 2;
+                };
+                const pts = [];
+                for (const el of scheme.querySelectorAll('svg text, svg tspan')) {
+                    if (!visible(el)) continue;
+                    const t = String(el.textContent || '').replace(/\\s/g, '').trim();
+                    if (!/^\\d{1,3}$/.test(t)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 80 || r.height > 80) continue;
+                    pts.push({
+                        x: Math.round(r.left + r.width / 2),
+                        y: Math.round(r.top + r.height / 2),
+                    });
+                }
+                const seen = new Set();
+                const uniq = [];
+                for (const p of pts) {
+                    const k = `${p.x}:${p.y}`;
+                    if (seen.has(k)) continue;
+                    seen.add(k);
+                    uniq.push(p);
+                }
+                return uniq;
+            }"""
+        )
+        n_txt = len(label_pts or [])
+        logger.info("[buy] svg_seat_text_targets: %s ta nuqta", n_txt)
+        if label_pts:
+            random.shuffle(label_pts)
+            for p in label_pts[: min(len(label_pts), 90)]:
+                x = int(p.get("x") or 0)
+                y = int(p.get("y") or 0)
+                if x <= 0 or y <= 0:
+                    continue
+                before_t = await _seat_selection_probe()
+                try:
+                    await page.mouse.click(x, y)
+                except Exception:
+                    continue
+                await page.wait_for_timeout(400)
+                after_t = await _seat_selection_probe()
+                if _seat_selection_success(before_t, after_t):
+                    logger.info("[buy] Random joy tanlandi: svg_text_mouse (%s,%s)", x, y)
+                    return
+    except Exception as ex:
+        logger.warning("[buy] svg text seat click xato: %s", ex)
 
     seat_selectors = [
         # Avval seat-map ichidagi aniq tugmalar.
@@ -2635,6 +2703,42 @@ async def _fill_passenger(page, passenger: dict) -> None:
         ],
         "citizenship",
     )
+    if citizenship:
+        try:
+            ok_c = await page.evaluate(
+                """(raw) => {
+                    const code = String(raw || '').trim().toUpperCase();
+                    if (!code) return false;
+                    const extra = [];
+                    if (code === 'UZ' || code.includes('O\'ZBEK') || code.includes('УЗБ')) {
+                        extra.push('UZB','860','UZBEK','O\'ZBEKISTON','ЎЗБ','УЗБЕК');
+                    }
+                    const needles = [code, ...extra].map((s) => String(s).toLowerCase());
+                    const hitOpt = (o) => {
+                        const v = String(o.value || '').toLowerCase();
+                        const t = String(o.textContent || '').toLowerCase();
+                        return needles.some((n) => n && (v.includes(n) || t.includes(n)));
+                    };
+                    for (const s of document.querySelectorAll('select')) {
+                        const st = window.getComputedStyle(s);
+                        const r = s.getBoundingClientRect();
+                        if (st.visibility === 'hidden' || st.display === 'none' || r.width < 4) continue;
+                        const opts = Array.from(s.options || []);
+                        const hit = opts.find(hitOpt);
+                        if (!hit) continue;
+                        s.value = hit.value;
+                        s.dispatchEvent(new Event('input', { bubbles: true }));
+                        s.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }
+                    return false;
+                }""",
+                citizenship,
+            )
+            if ok_c:
+                logger.info("[buy] Passenger filled: citizenship (select)=%s", citizenship)
+        except Exception:
+            pass
 
 
 async def _click_continue_to_payment(page) -> bool:
