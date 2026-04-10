@@ -1809,7 +1809,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     after.includes('active') ||
                     after.includes('chosen') ||
                     (before !== after && (after.includes('seat') || after.includes('place')));
-                return becameSelected || true;
+                return becameSelected;
             }"""
         )
         if js_clicked:
@@ -1973,7 +1973,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     }
 
                     const after = probe();
-                    if (after.selected > before.selected || after.continueEnabled) return true;
+                    if (after.selected > before.selected) return true;
                 }
                 return false;
             }"""
@@ -2000,6 +2000,14 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     return st.visibility !== 'hidden' && st.display !== 'none' && r.width >= 8 && r.height >= 8;
                 };
                 const small = (r) => r.width <= 72 && r.height <= 72 && r.width >= 10 && r.height >= 10;
+                const isGrayLike = (rgb) => {
+                    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/i.exec(String(rgb || ''));
+                    if (!m) return false;
+                    const r = Number(m[1] || 0);
+                    const g = Number(m[2] || 0);
+                    const b = Number(m[3] || 0);
+                    return Math.abs(r - g) <= 14 && Math.abs(g - b) <= 14;
+                };
                 const points = [];
 
                 // 1) Raqamli tugunlar (masalan "14") markazi.
@@ -2008,7 +2016,14 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     if (!/^\\d{1,3}$/.test(t)) return false;
                     if (!visible(el)) return false;
                     const r = el.getBoundingClientRect();
-                    return small(r);
+                    if (!small(r)) return false;
+                    const st = window.getComputedStyle(el);
+                    const pst = el.parentElement ? window.getComputedStyle(el.parentElement) : st;
+                    const fg = String(st.color || '');
+                    const bg = String(st.backgroundColor || pst.backgroundColor || '');
+                    // Band joylar odatda xira-kulrang: imkon qadar chiqarib tashlaymiz.
+                    if (isGrayLike(fg) && (isGrayLike(bg) || !bg || bg.includes('0, 0, 0, 0'))) return false;
+                    return true;
                 });
                 for (const el of numeric) {
                     const r = el.getBoundingClientRect();
@@ -2069,8 +2084,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     after_free = int(after.get("freeSeats") or -1)
                     seat_ok = (
                         (after_sel > before_sel) or
-                        (before_free >= 0 and after_free >= 0 and after_free < before_free) or
-                        bool(after.get("continueEnabled"))
+                        (before_free >= 0 and after_free >= 0 and after_free < before_free)
                     )
                     if seat_ok and not bool(after.get("seatWarn")):
                         logger.info(
@@ -2173,8 +2187,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     ) {
                         return true;
                     }
-                    // UI class o'zgarmasa ham click o'tgan bo'lishi mumkin.
-                    return true;
+                    // UI class o'zgarmasa, bu nuqta seat emas deb hisoblaymiz.
+                    continue;
                 }
                 return false;
             }"""
