@@ -181,14 +181,36 @@ body {
 .history-section {
   margin-top: 12px;
 }
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
 .history-title {
   font-size: 12px;
   font-weight: 700;
   color: var(--tg-hint);
   text-transform: uppercase;
   letter-spacing: .5px;
-  margin: 0 2px 8px;
+  margin: 0 2px;
+  flex: 1;
+  min-width: 0;
 }
+.history-clear-all {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--tg-link);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.history-clear-all:active { opacity: 0.75; }
 .history-list {
   display: flex;
   flex-direction: column;
@@ -202,10 +224,35 @@ body {
   box-shadow: var(--shadow);
   padding: 11px 12px;
 }
+.history-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.history-delete-one {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tg-secondary-bg);
+  color: var(--tg-hint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.history-delete-one:active { opacity: 0.75; }
 .history-route {
   font-size: 14px;
   font-weight: 700;
   color: var(--tg-text);
+  flex: 1;
+  min-width: 0;
 }
 .history-meta {
   margin-top: 3px;

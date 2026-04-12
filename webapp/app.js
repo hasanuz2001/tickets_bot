@@ -248,6 +248,21 @@ function saveSearchHistory() {
   }
 }
 
+function removeSearchHistoryItem(idx) {
+  if (idx < 0 || idx >= state.searchHistory.length) return;
+  state.searchHistory.splice(idx, 1);
+  saveSearchHistory();
+  renderSearchHistory();
+}
+
+function clearSearchHistory() {
+  if (!state.searchHistory.length) return;
+  if (!confirm("Barcha qidiruv tarixini o‘chirasizmi?")) return;
+  state.searchHistory = [];
+  saveSearchHistory();
+  renderSearchHistory();
+}
+
 function pushSearchHistoryFromState() {
   if (!(state.fromCode && state.toCode && state.date)) return;
   const e = historyEntryFromState();
@@ -277,7 +292,10 @@ function renderSearchHistory() {
       : "";
     return `
       <div class="history-item">
-        <div class="history-route">${h.fromName} → ${h.toName}</div>
+        <div class="history-item-top">
+          <div class="history-route">${h.fromName} → ${h.toName}</div>
+          <button type="button" class="history-delete-one" title="O‘chirish" aria-label="O‘chirish" onclick="removeSearchHistoryItem(${i})">✕</button>
+        </div>
         <div class="history-meta">${h.dateLabel || h.date}${t}${trainBrandText}${comfortText}</div>
         <div class="history-actions">
           <button type="button" class="history-action-btn history-action-secondary" onclick="applyHistoryForEdit(${i})">Tahrirlash</button>
