@@ -399,10 +399,16 @@ def extract_available(
             cname = car.get("carTypeName", "")
             if not car_matches_comfort_multi(cname, cc_spec):
                 continue
-            price = next(
-                (t.get("tariff") for t in car.get("tariffs", []) if t.get("tariff")),
-                None,
-            )
+            prices = []
+            for t in car.get("tariffs", []) or []:
+                v = t.get("tariff")
+                if v is None or v == "":
+                    continue
+                try:
+                    prices.append(float(v))
+                except (TypeError, ValueError):
+                    continue
+            price = min(prices) if prices else None
             seats.append({
                 "type":  cname or "Vagon",
                 "free":  free,

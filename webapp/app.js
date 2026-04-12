@@ -854,6 +854,15 @@ function getBrandClass(brand) {
   return BRAND_CLASS[brand] || "brand-default";
 }
 
+/** Bir vagonda bir nechta tarif bo'lsa, saytdagi asosiy narx odatda eng pasti — birinchisini emas, minimumni olamiz. */
+function carMinTariff(car) {
+  const nums = (car.tariffs || [])
+    .map(t => (t && t.tariff != null ? Number(t.tariff) : NaN))
+    .filter(n => !Number.isNaN(n) && n > 0);
+  if (!nums.length) return null;
+  return Math.min(...nums);
+}
+
 function buildTrainCard(train) {
   const dep   = parseTime(train.departureDate || train.departureTime);
   const arr   = parseTime(train.arrivalDate   || train.arrivalTime);
@@ -864,7 +873,7 @@ function buildTrainCard(train) {
 
   const seatsHtml = avail.map(car => {
     const icon  = CAR_ICONS[car.carTypeName] || "🪑";
-    const price = (car.tariffs || []).map(t => t.tariff).filter(Boolean)[0];
+    const price = carMinTariff(car);
     const trainData = JSON.stringify({
       number:   train.number || "",
       brand:    brand,
@@ -931,7 +940,7 @@ function buildTrainCardOtherComfort(train) {
 
   const seatsHtml = avail.map(car => {
     const icon  = CAR_ICONS[car.carTypeName] || "🪑";
-    const price = (car.tariffs || []).map(t => t.tariff).filter(Boolean)[0];
+    const price = carMinTariff(car);
     return `<div class="seat-row">
       <div class="seat-type">
         <span class="seat-icon">${icon}</span>
