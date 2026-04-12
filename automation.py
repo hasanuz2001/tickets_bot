@@ -1467,17 +1467,33 @@ async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
                     if (t.length < 8 || t.length > 420) continue;
                     const low = t.toLowerCase();
                     if (/jami|умум|итого|total|to'lov|оплат/i.test(low) && t.length > 80) continue;
-                    const m = t.match(reOne);
-                    if (!m) continue;
-                    const price = parseInt(String(m[1]).replace(/\\D/g, ''), 10);
-                    if (!Number.isFinite(price) || price < 12000 || price > 900000) continue;
-                    infos.push({ price, el, tlen: t.length, t: t.slice(0, 100), top: r.top, area: r.width * r.height });
+                    const allM = Array.from(t.matchAll(/(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/gi));
+                    const prices = [];
+                    for (const mm of allM) {
+                        const p = parseInt(String(mm[1]).replace(/\\D/g, ''), 10);
+                        if (Number.isFinite(p) && p >= 12000 && p <= 900000) prices.push(p);
+                    }
+                    if (!prices.length) continue;
+                    const price = Math.min(...prices);
+                    const role = String(el.getAttribute('role') || '');
+                    const cls0 = String(el.className || '');
+                    const tabish = role === 'tab' || /swiper-slide|mat-mdc-tab|mdc-tab|tab-label/i.test(cls0);
+                    infos.push({
+                        price,
+                        el,
+                        tlen: t.length,
+                        t: t.slice(0, 100),
+                        top: r.top,
+                        area: r.width * r.height,
+                        tabish,
+                    });
                 }
                 if (!infos.length) return { ok: false, n: 0 };
                 let minP = Infinity;
                 for (const x of infos) if (x.price < minP) minP = x.price;
                 const tier = infos.filter((x) => x.price === minP);
                 tier.sort((a, b) => {
+                    if (a.tabish !== b.tabish) return (a.tabish ? 0 : 1) - (b.tabish ? 0 : 1);
                     if (a.tlen !== b.tlen) return a.tlen - b.tlen;
                     return a.area - b.area;
                 });
@@ -1511,6 +1527,118 @@ async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
     except Exception as ex:
         logger.warning("[buy] Eng arzon vagon tab: %s", ex)
         return None
+
+
+async def _deselect_to_single_seat(page) -> None:
+    """
+    Bitta yo'lovchi uchun faqat 1 ta joy qoldiradi. Avtomatik tanlash ko'p marta bosilganda
+    2–4 ta joy tanlanishi mumkin — ortiqchalarini sxemada qayta bosib bekor qilamiz.
+    """
+    try:
+        for _round in range(12):
+            res = await page.evaluate(
+                """() => {
+                    const scheme =
+                        document.querySelector('[class*="scheme" i]') ||
+                        document.querySelector('[class*="seat-map" i]');
+                    if (!scheme) return { n: 0, done: true };
+                    const visible = (el) => {
+                        const st = window.getComputedStyle(el);
+                        const r = el.getBoundingClientRect();
+                        return (
+                            st.visibility !== 'hidden' &&
+                            st.display !== 'none' &&
+                            r.width >= 6 &&
+                            r.height >= 6
+                        );
+                    };
+                    const mergedSeatDigits = (g) => {
+                        const bits = Array.from(g.querySelectorAll('text, tspan'))
+                            .map((e) => String(e.textContent || '').replace(/\\s/g, ''))
+                            .filter(Boolean);
+                        const merged = bits.join('');
+                        return /^\\d{1,3}$/.test(merged) ? merged : '';
+                    };
+                    const looksSelected = (g) => {
+                        const cls = String(g.className || '').toLowerCase();
+                        const ap = String(
+                            g.getAttribute('aria-pressed') ||
+                                g.getAttribute('aria-selected') ||
+                                ''
+                        ).toLowerCase();
+                        if (
+                            cls.includes('selected') ||
+                            cls.includes('active') ||
+                            cls.includes('choice') ||
+                            cls.includes('picked') ||
+                            cls.includes('current') ||
+                            ap === 'true'
+                        ) {
+                            return true;
+                        }
+                        const p = g.querySelector('path, rect, circle, polygon');
+                        if (!p) return false;
+                        const f = String(window.getComputedStyle(p).fill || '');
+                        const s = String(window.getComputedStyle(p).stroke || '');
+                        const paint = (v) => {
+                            if (!v || v === 'none') return false;
+                            const i = v.indexOf('rgb');
+                            if (i < 0) return false;
+                            const o = v.indexOf('(', i);
+                            const cl = v.indexOf(')', o);
+                            if (o < 0 || cl < 0) return false;
+                            const parts = v
+                                .slice(o + 1, cl)
+                                .split(',')
+                                .map((x) => parseInt(String(x).trim(), 10));
+                            if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return false;
+                            const r = parts[0];
+                            const gg = parts[1];
+                            const b = parts[2];
+                            if (b >= 130 && b > r + 18) return true;
+                            if (gg >= 110 && b >= 90 && r < 95) return true;
+                            return false;
+                        };
+                        return paint(f) || paint(s);
+                    };
+                    const selected = [];
+                    for (const g of scheme.querySelectorAll('svg g')) {
+                        if (!visible(g)) continue;
+                        const lab = mergedSeatDigits(g);
+                        if (!lab) continue;
+                        const r = g.getBoundingClientRect();
+                        if (r.width > 130 || r.height > 130 || r.width < 4 || r.height < 4) continue;
+                        if (looksSelected(g)) selected.push(g);
+                    }
+                    const n = selected.length;
+                    if (n <= 1) return { n, done: true };
+                    const victim = selected[selected.length - 1];
+                    const r = victim.getBoundingClientRect();
+                    const x = r.left + r.width / 2;
+                    const y = r.top + r.height / 2;
+                    try {
+                        victim.dispatchEvent(
+                            new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+                        );
+                    } catch (e) {
+                        try {
+                            victim.click();
+                        } catch (e2) {}
+                    }
+                    return { n, done: false, x, y };
+                }"""
+            )
+            if not isinstance(res, dict):
+                break
+            n = int(res.get("n") or 0)
+            if res.get("done") or n <= 1:
+                if n > 1:
+                    logger.info("[buy] Joylar soni: %s (bitta qoldirish uchun sxema aniqlanmadi)", n)
+                break
+            logger.info("[buy] Ortiqcha joy bekor: %s ta tanlangan edi, bittasini qayta bosildi", n)
+            await page.wait_for_timeout(420)
+    except Exception as ex:
+        logger.warning("[buy] Ortiqcha joylarni bekor qilish: %s", ex)
 
 
 async def _pick_car_and_seat(page, car_type: str) -> None:
@@ -1811,7 +1939,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         logger.info("[buy] svg_seat_g_targets: %s ta nuqta (tspan birlashtirilgan)", n_g)
         if click_pts:
             random.shuffle(click_pts)
-            for p in click_pts[: min(len(click_pts), 90)]:
+            # Bir nechta muvaffaqiyatsiz bosish ketma-ket 2–4 ta joyni tanlab qo'yishi mumkin.
+            for p in click_pts[: min(len(click_pts), 10)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -1869,7 +1998,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         logger.info("[buy] svg_seat_text_targets: %s ta nuqta", n_txt)
         if label_pts:
             random.shuffle(label_pts)
-            for p in label_pts[: min(len(label_pts), 90)]:
+            for p in label_pts[: min(len(label_pts), 10)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2055,24 +2184,24 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                 });
                 if (!nums.length) return false;
                 const shuffled = nums.sort(() => Math.random() - 0.5);
-                for (const n of shuffled) {
-                    let p = n;
-                    for (let i = 0; i < 4 && p; i++) {
-                        const cls = String(p.className || '').toLowerCase();
-                        const clickable =
-                            p.tagName === 'BUTTON' ||
-                            p.tagName === 'A' ||
-                            p.getAttribute('role') === 'button' ||
-                            p.hasAttribute('onclick') ||
-                            cls.includes('seat') ||
-                            cls.includes('place');
-                        if (clickable && visible(p) && !disabledLike(p)) {
-                            p.scrollIntoView({ block: 'center', inline: 'center' });
-                            p.click();
-                            return true;
-                        }
-                        p = p.parentElement;
+                const n = shuffled[0];
+                if (!n) return false;
+                let p = n;
+                for (let i = 0; i < 4 && p; i++) {
+                    const cls = String(p.className || '').toLowerCase();
+                    const clickable =
+                        p.tagName === 'BUTTON' ||
+                        p.tagName === 'A' ||
+                        p.getAttribute('role') === 'button' ||
+                        p.hasAttribute('onclick') ||
+                        cls.includes('seat') ||
+                        cls.includes('place');
+                    if (clickable && visible(p) && !disabledLike(p)) {
+                        p.scrollIntoView({ block: 'center', inline: 'center' });
+                        p.click();
+                        return true;
                     }
+                    p = p.parentElement;
                 }
                 return false;
             }"""
@@ -2376,8 +2505,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         if click_points:
             random.shuffle(click_points)
             probe_before = await _seat_selection_probe()
-            # Ko'p urinish qilmaymiz: eng ko'pi 24 ta nuqta.
-            for p in click_points[:48]:
+            # Ko'p urinish ketma-ket ko'p joy tanlaydi — cheklaymiz.
+            for p in click_points[:10]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2413,7 +2542,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
 
     # Oxirgi fallback: bitta JS bilan taxminiy bosish o'rniga probe bilan tekshiruvli sikl.
     try:
-        for try_idx in range(40):
+        for try_idx in range(10):
             before_cp = await _seat_selection_probe()
             clicked = await page.evaluate(
                 """() => {
@@ -2509,7 +2638,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             if tc:
                 order = list(range(tc))
                 random.shuffle(order)
-                for idx in order[: min(tc, 55)]:
+                for idx in order[: min(tc, 15)]:
                     before_pl = await _seat_selection_probe()
                     el = tiles.nth(idx)
                     try:
@@ -3261,6 +3390,7 @@ async def buy_ticket(
 
             logger.info("[buy_ticket][6/6] vagon/joy va yo'lovchi bosqichlari")
             await _pick_car_and_seat(page, car_type or "")
+            await _deselect_to_single_seat(page)
             await page.wait_for_timeout(800)
             await _fill_passenger(page, passenger)
             await page.wait_for_timeout(600)
@@ -3287,6 +3417,7 @@ async def buy_ticket(
                     seat_warn,
                 )
                 await _pick_car_and_seat(page, car_type or "")
+                await _deselect_to_single_seat(page)
                 await page.wait_for_timeout(600)
 
             screenshot = await page.screenshot(full_page=False)
