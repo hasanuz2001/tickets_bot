@@ -2741,7 +2741,138 @@ async def _fill_passenger(page, passenger: dict) -> None:
             pass
 
 
+async def _decline_insurance_if_present(page) -> None:
+    """
+    Sug'urta qo'shimcha xizmati bo'lsa «sugurtasiz» / yo'q variantini tanlaydi.
+    Aks holda Davom etish bosilmay qolishi yoki modal bloklashi mumkin.
+    """
+    try:
+        blob = (await page.inner_text("body") or "").lower()
+    except Exception:
+        blob = ""
+    if not any(
+        k in blob
+        for k in (
+            "sug'urta",
+            "sugurta",
+            "sugʻurta",
+            "страхов",
+            "insurance",
+            "застрах",
+        )
+    ):
+        return
+
+    try:
+        hit = await page.evaluate(
+            """() => {
+                const textOf = (el) => String(el.textContent || '').replace(/\\s+/g, ' ').trim();
+                const vis = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 6 && r.height > 6;
+                };
+                const insNear = (el) => {
+                    let p = el;
+                    for (let i = 0; i < 10 && p; i++, p = p.parentElement) {
+                        const s = textOf(p).toLowerCase();
+                        if (s.length > 500) break;
+                        if (['sugurt', 'sugʻurt', 'страхов', 'insurance', 'застрах'].some((k) => s.includes(k))) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                const declineText = (s) => {
+                    const t = s.toLowerCase();
+                    if (t.length > 140) return false;
+                    return (
+                        t.includes('sugurtasiz') ||
+                        t.includes("sug'urtasiz") ||
+                        t.includes('sugʻurtasiz') ||
+                        t.includes('без страх') ||
+                        t.includes('безстрах') ||
+                        t.includes('without insurance') ||
+                        t.includes('kerak emas') ||
+                        t.includes('tanlamayman') ||
+                        t.includes("qo'masdan") ||
+                        t.includes('qoʻshmasdan') ||
+                        t.includes('отказ') ||
+                        /^\\s*yoq\\s*$/i.test(t) ||
+                        /^\\s*yo'q\\s*$/i.test(t) ||
+                        /^\\s*нет\\s*$/i.test(t) ||
+                        /^\\s*no\\s*$/i.test(t)
+                    );
+                };
+
+                const clickables = Array.from(
+                    document.querySelectorAll(
+                        'label, button, [role="radio"], [role="option"], mat-radio-button, mat-option, .mdc-radio, .mat-mdc-radio-button, a, span, div[role="button"]'
+                    )
+                );
+                for (const el of clickables) {
+                    if (!vis(el)) continue;
+                    const t = textOf(el);
+                    if (!t) continue;
+                    const shortNeg =
+                        insNear(el) &&
+                        t.length < 80 &&
+                        /yoq|yоq|нет|no|без|sugurtasiz|sugurt/i.test(t);
+                    if (!(declineText(t) || shortNeg)) continue;
+                    try {
+                        el.click();
+                        return 'click:' + t.slice(0, 72);
+                    } catch (e) {}
+                }
+
+                for (const inp of Array.from(document.querySelectorAll('input[type="radio"]'))) {
+                    if (!vis(inp)) continue;
+                    const id = inp.getAttribute('id');
+                    const lab = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+                    const lt = lab ? textOf(lab) : '';
+                    const v = String(inp.value || '').toLowerCase();
+                    if (
+                        /^(false|0|no|нет)$/.test(v) ||
+                        declineText(lt) ||
+                        (insNear(inp) && /yoq|нет|no|без|sugurtasiz/i.test((lt + ' ' + v).toLowerCase()))
+                    ) {
+                        try {
+                            inp.click();
+                            return 'radio:' + (lt || v).slice(0, 60);
+                        } catch (e) {}
+                    }
+                }
+                return '';
+            }"""
+        )
+        if hit:
+            logger.info("[buy] sug'urta rad etish: %s", hit)
+            await page.wait_for_timeout(450)
+    except Exception as ex:
+        logger.warning("[buy] sug'urta rad etish (evaluate) xato: %s", ex)
+
+    # Playwright zaxira: aniq matnlar (sayt yangilansa ham ishlashi uchun)
+    for pattern, kind in (
+        (r"(?i)sugurt[ao']?siz", "regex_sugurtasiz"),
+        (r"(?i)^yo['\u2019]?q$", "regex_yoq"),
+        (r"(?i)^нет$", "regex_net"),
+        (r"(?i)без\s*страх", "regex_bez"),
+    ):
+        try:
+            loc = page.get_by_text(re.compile(pattern)).first
+            if await loc.count():
+                await loc.scroll_into_view_if_needed()
+                await loc.click(timeout=4000)
+                logger.info("[buy] sug'urta rad etish: %s", kind)
+                await page.wait_for_timeout(400)
+                return
+        except Exception:
+            continue
+
+
 async def _click_continue_to_payment(page) -> bool:
+    await _decline_insurance_if_present(page)
+
     names = (
         "Продолжить",
         "Далее",
