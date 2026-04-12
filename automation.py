@@ -1433,18 +1433,85 @@ def _seat_selection_success(before: dict, after: dict) -> bool:
     return False
 
 
+async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
+    """
+    cars-page: gorizontal vagon tablari (masalan 02 — qimmat 1C, 03–07 — arzonroq).
+    Saytda «Tanlash» yo'q; avval eng past «... so'mdan» ko'rsatilgan tabni bosamiz.
+    """
+    try:
+        res = await page.evaluate(
+            """() => {
+                const rePrice = /(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/i;
+                const visible = (el) => {
+                    const st = window.getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    if (st.visibility === 'hidden' || st.display === 'none') return false;
+                    if (r.width < 6 || r.height < 6) return false;
+                    return true;
+                };
+                const looksWagonChooser = (t) => {
+                    const low = String(t || '').toLowerCase();
+                    if (!/vagon|вагон/.test(low) && !/\\b0\\d\\b/.test(t)) return false;
+                    return rePrice.test(t);
+                };
+                const candidates = [];
+                const seen = new Set();
+                const nodes = document.querySelectorAll(
+                    '[role="tab"], [role="tablist"] [role="tab"], button, a, [class*="tab-label"], ' +
+                    '[class*="mat-mdc-tab"], [class*="swiper-slide"], [class*="mdc-tab"]'
+                );
+                for (const el of nodes) {
+                    if (!visible(el)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.top > window.innerHeight * 0.42) continue;
+                    const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+                    if (t.length > 500) continue;
+                    if (!looksWagonChooser(t)) continue;
+                    const m = t.match(rePrice);
+                    if (!m) continue;
+                    const digits = String(m[1]).replace(/\\D/g, '');
+                    const price = parseInt(digits, 10);
+                    if (!Number.isFinite(price) || price < 15000) continue;
+                    const key = Math.round(r.top / 4) + '_' + Math.round(r.left / 4);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    candidates.push({ price, el, snippet: t.slice(0, 80) });
+                }
+                if (!candidates.length) return null;
+                candidates.sort((a, b) => a.price - b.price);
+                const best = candidates[0];
+                try {
+                    best.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                } catch (e) {
+                    best.el.click();
+                }
+                return best.price;
+            }"""
+        )
+        return int(res) if res is not None else None
+    except Exception as ex:
+        logger.warning("[buy] Eng arzon vagon tab: %s", ex)
+        return None
+
+
 async def _pick_car_and_seat(page, car_type: str) -> None:
     """Avval eng arzon tarif/vagon, keyin bo'sh joylardan random bittasi."""
 
     def _parse_price_sum(raw: str) -> int | None:
         txt = (raw or "").replace("\u00a0", " ")
-        m = re.findall(r"(\d[\d\s]{2,})\s*(?:so['`ʼ]m|сум)", txt, re.I)
+        m = re.findall(r"(\d[\d\s]{2,})\s*(?:so['`ʼ']m(?:dan)?|сум\.?)", txt, re.I)
         if not m:
             return None
         digits = re.sub(r"\D", "", m[0] or "")
         return int(digits) if digits else None
 
     preferred = (car_type or "").strip().lower()
+
+    if "cars-page" in ((page.url or "").lower()):
+        cheapest_tab = await _click_cheapest_wagon_tab_if_present(page)
+        if cheapest_tab is not None:
+            logger.info("[buy] Vagon tab (eng past narx): %s so'm", cheapest_tab)
+            await page.wait_for_timeout(900)
     pick_candidates: list[tuple[int, int, int, object]] = []
     choose_btn = page.locator(
         "button:has-text('Tanlash'), button:has-text('tanlash'), "
