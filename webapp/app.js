@@ -39,10 +39,11 @@ const DAY_NAMES   = ["Yak", "Dush", "Sesh", "Chor", "Pay", "Jum", "Shan"];
 const MONTH_NAMES = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek"];
 const CAR_ICONS   = { "Плацкарт": "🛏", "Купе": "🛏", "СВ": "⭐", "Люкс": "⭐", "Сидячий": "💺", "Общий": "🚃" };
 
-// Vaqt oralig'i uchun soatlar (05:00 dan 23:00 gacha)
-const TIME_SLOTS = ["05:00","06:00","07:00","08:00","09:00","10:00","11:00","12:00",
-                    "13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00",
-                    "21:00","22:00","23:00"];
+// Vaqt oralig'i: 00:00 dan 23:59 gacha (har soat + kun oxirgi daqiqasi)
+const TIME_SLOTS = [
+  ...Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`),
+  "23:59",
+];
 
 // Poyezd brend ranglari
 const BRAND_CLASS = {
