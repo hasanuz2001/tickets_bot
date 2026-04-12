@@ -1436,59 +1436,78 @@ def _seat_selection_success(before: dict, after: dict) -> bool:
 async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
     """
     cars-page: gorizontal vagon tablari (masalan 02 — qimmat 1C, 03–07 — arzonroq).
-    Saytda «Tanlash» yo'q; avval eng past «... so'mdan» ko'rsatilgan tabni bosamiz.
+    DOM har xil bo'lishi mumkin — faqat «vagon» matniga bog'lanmasdan, yuqori qismdagi
+    barcha «NNN so'm / so'mdan / сум» narxlardan minimalini tanlaymiz.
     """
     try:
         res = await page.evaluate(
             """() => {
-                const rePrice = /(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/i;
+                const reOne = /(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/i;
                 const visible = (el) => {
                     const st = window.getComputedStyle(el);
                     const r = el.getBoundingClientRect();
                     if (st.visibility === 'hidden' || st.display === 'none') return false;
-                    if (r.width < 6 || r.height < 6) return false;
+                    if (st.pointerEvents === 'none') return false;
+                    if (r.width < 4 || r.height < 4) return false;
                     return true;
                 };
-                const looksWagonChooser = (t) => {
-                    const low = String(t || '').toLowerCase();
-                    if (!/vagon|вагон/.test(low) && !/\\b0\\d\\b/.test(t)) return false;
-                    return rePrice.test(t);
-                };
-                const candidates = [];
-                const seen = new Set();
+                const maxTop = Math.min(window.innerHeight * 0.58, 520);
                 const nodes = document.querySelectorAll(
-                    '[role="tab"], [role="tablist"] [role="tab"], button, a, [class*="tab-label"], ' +
-                    '[class*="mat-mdc-tab"], [class*="swiper-slide"], [class*="mdc-tab"]'
+                    '[role="tab"], [role="tablist"] [role="tab"], button, a, label, li, span, div, ' +
+                    '[class*="tab-label"], [class*="mat-mdc-tab"], [class*="mdc-tab"], ' +
+                    '[class*="swiper-slide"], [class*="chip"], [class*="wagon"], [class*="vagon"], ' +
+                    '[class*="car-"], [tabindex="0"]'
                 );
+                const infos = [];
                 for (const el of nodes) {
                     if (!visible(el)) continue;
                     const r = el.getBoundingClientRect();
-                    if (r.top > window.innerHeight * 0.42) continue;
+                    if (r.top > maxTop) continue;
                     const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
-                    if (t.length > 500) continue;
-                    if (!looksWagonChooser(t)) continue;
-                    const m = t.match(rePrice);
+                    if (t.length < 8 || t.length > 420) continue;
+                    const low = t.toLowerCase();
+                    if (/jami|умум|итого|total|to'lov|оплат/i.test(low) && t.length > 80) continue;
+                    const m = t.match(reOne);
                     if (!m) continue;
-                    const digits = String(m[1]).replace(/\\D/g, '');
-                    const price = parseInt(digits, 10);
-                    if (!Number.isFinite(price) || price < 15000) continue;
-                    const key = Math.round(r.top / 4) + '_' + Math.round(r.left / 4);
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    candidates.push({ price, el, snippet: t.slice(0, 80) });
+                    const price = parseInt(String(m[1]).replace(/\\D/g, ''), 10);
+                    if (!Number.isFinite(price) || price < 12000 || price > 900000) continue;
+                    infos.push({ price, el, tlen: t.length, t: t.slice(0, 100), top: r.top, area: r.width * r.height });
                 }
-                if (!candidates.length) return null;
-                candidates.sort((a, b) => a.price - b.price);
-                const best = candidates[0];
+                if (!infos.length) return { ok: false, n: 0 };
+                let minP = Infinity;
+                for (const x of infos) if (x.price < minP) minP = x.price;
+                const tier = infos.filter((x) => x.price === minP);
+                tier.sort((a, b) => {
+                    if (a.tlen !== b.tlen) return a.tlen - b.tlen;
+                    return a.area - b.area;
+                });
+                const best = tier[0];
+                try {
+                    best.el.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'instant' });
+                } catch (e) { /* ignore */ }
                 try {
                     best.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                 } catch (e) {
-                    best.el.click();
+                    try { best.el.click(); } catch (e2) { return { ok: false, n: infos.length, err: String(e2) }; }
                 }
-                return best.price;
+                return { ok: true, price: minP, n: infos.length, snippet: best.t };
             }"""
         )
-        return int(res) if res is not None else None
+        if isinstance(res, dict) and res.get("ok"):
+            logger.info(
+                "[buy] Vagon tab (eng past narx): %s so'm (narxlardan %s ta topildi)%s",
+                res.get("price"),
+                res.get("n"),
+                f" | {res.get('snippet', '')[:70]}" if res.get("snippet") else "",
+            )
+            return int(res["price"])
+        if isinstance(res, dict):
+            logger.warning(
+                "[buy] Eng arzon vagon tab topilmadi (yoki bosilmadi): n=%s err=%s",
+                res.get("n"),
+                res.get("err"),
+            )
+        return None
     except Exception as ex:
         logger.warning("[buy] Eng arzon vagon tab: %s", ex)
         return None
@@ -1510,7 +1529,6 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     if "cars-page" in ((page.url or "").lower()):
         cheapest_tab = await _click_cheapest_wagon_tab_if_present(page)
         if cheapest_tab is not None:
-            logger.info("[buy] Vagon tab (eng past narx): %s so'm", cheapest_tab)
             await page.wait_for_timeout(900)
     pick_candidates: list[tuple[int, int, int, object]] = []
     choose_btn = page.locator(
