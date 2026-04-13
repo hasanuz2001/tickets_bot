@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -104,7 +104,9 @@ def init_db():
                 status       TEXT NOT NULL DEFAULT 'pending',
                 result_msg   TEXT,
                 screenshot   BLOB,
-                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                source           TEXT,
+                subscription_id  INTEGER
             )
         """)
         # Migrations for existing DBs
@@ -129,6 +131,14 @@ def init_db():
         ]:
             try:
                 conn.execute(f"ALTER TABLE passenger_info ADD COLUMN {col}")
+            except Exception:
+                pass
+        for col in (
+            "source TEXT",
+            "subscription_id INTEGER",
+        ):
+            try:
+                conn.execute(f"ALTER TABLE purchase_requests ADD COLUMN {col}")
             except Exception:
                 pass
         conn.commit()
@@ -532,43 +542,46 @@ async def process_subscription(sub: sqlite3.Row) -> None:
 
                 if passenger:
                     try:
-                        from automation import buy_ticket
-                        result = await buy_ticket(
-                            from_code    = sub["from_code"],
-                            to_code      = sub["to_code"],
-                            from_name    = sub["from_name"],
-                            to_name      = sub["to_name"],
-                            date         = sub["date"],
-                            train_number = train["number"],
-                            car_type     = train["seats"][0]["type"] if train["seats"] else "",
-                            passenger    = dict(passenger),
+                        car_type = (
+                            train["seats"][0]["type"] if train.get("seats") else "Vagon"
                         )
-                        tg_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
-                        seats_txt = "\n".join(
-                            f"  🪑 {s['type']}: {s['free']} joy | "
-                            f"{int(float(s['price'])):,} so'm"
-                            for s in train["seats"][:2] if s.get("price") is not None
+                        auto_req = PurchaseRequest(
+                            user_id=str(sub["user_id"]),
+                            from_code=str(sub["from_code"]),
+                            to_code=str(sub["to_code"]),
+                            from_name=str(sub["from_name"]),
+                            to_name=str(sub["to_name"]),
+                            date=str(sub["date"]),
+                            train_number=str(train.get("number") or ""),
+                            train_brand=str(train.get("brand") or ""),
+                            dep_time=str(train.get("dep") or ""),
+                            arr_time=str(train.get("arr") or ""),
+                            car_type=car_type,
                         )
-                        emoji = "✅" if result["status"] in ("success", "partial") else "⚠️"
-                        text = (
-                            f"🤖 <b>Avtomatik xarid natijasi</b>\n\n"
-                            f"🚆 {sub['from_name']} → {sub['to_name']}\n"
-                            f"📅 {sub['date']}\n"
-                            f"🕐 {train['dep']} → {train['arr']} | {train['brand']} №{train['number']}\n"
-                            f"{seats_txt}\n\n"
-                            f"{emoji} {result['message']}"
+                        with get_db() as conn:
+                            cur = conn.execute(
+                                """INSERT INTO purchase_requests
+                                   (user_id, from_name, to_name, date, train_number, train_brand,
+                                    dep_time, arr_time, car_type, status, source, subscription_id)
+                                   VALUES (?,?,?,?,?,?,?,?,?,'pending','watch',?)""",
+                                (
+                                    auto_req.user_id,
+                                    auto_req.from_name,
+                                    auto_req.to_name,
+                                    auto_req.date,
+                                    auto_req.train_number,
+                                    auto_req.train_brand,
+                                    auto_req.dep_time,
+                                    auto_req.arr_time,
+                                    auto_req.car_type,
+                                    int(sub["id"]),
+                                ),
+                            )
+                            purchase_id = cur.lastrowid
+                            conn.commit()
+                        await process_purchase(
+                            purchase_id, dict(passenger), auto_req
                         )
-                        async with httpx.AsyncClient(timeout=15) as client:
-                            if result.get("screenshot"):
-                                await client.post(
-                                    f"{tg_url}/sendPhoto",
-                                    data={"chat_id": sub["user_id"], "caption": text, "parse_mode": "HTML"},
-                                    files={"photo": ("result.png", result["screenshot"], "image/png")},
-                                )
-                            else:
-                                await client.post(f"{tg_url}/sendMessage", json={
-                                    "chat_id": sub["user_id"], "text": text, "parse_mode": "HTML",
-                                })
                     except Exception as ae:
                         logger.error(f"Auto-buy failed: {ae}")
                         msg = build_notification(sub, trains)
@@ -969,10 +982,21 @@ async def purchase_ticket(req: PurchaseRequest):
         # Xarid so'rovini saqlash
         cur = conn.execute(
             """INSERT INTO purchase_requests
-               (user_id, from_name, to_name, date, train_number, train_brand, dep_time, arr_time, car_type)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (req.user_id, req.from_name, req.to_name, req.date,
-             req.train_number, req.train_brand, req.dep_time, req.arr_time, req.car_type),
+               (user_id, from_name, to_name, date, train_number, train_brand, dep_time, arr_time, car_type, source, subscription_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                req.user_id,
+                req.from_name,
+                req.to_name,
+                req.date,
+                req.train_number,
+                req.train_brand,
+                req.dep_time,
+                req.arr_time,
+                req.car_type,
+                "miniapp",
+                None,
+            ),
         )
         purchase_id = cur.lastrowid
         conn.commit()
@@ -1107,6 +1131,33 @@ async def process_purchase(purchase_id: int, passenger: dict, req: PurchaseReque
         await _notify_purchase_telegram(req, result)
     except Exception:
         logger.exception("purchase #%s Telegram notify failed", purchase_id)
+
+
+@app.get("/api/purchase-requests/{user_id}")
+async def list_purchase_requests(
+    user_id: str,
+    limit: int = Query(40, ge=1, le=80),
+):
+    """Mini App «Kuzatishlar»: foydalanuvchining chipta xarid topshiriqlari (holat bilan)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, user_id, from_name, to_name, date, train_number, train_brand,
+                      dep_time, arr_time, car_type, status, result_msg, created_at,
+                      COALESCE(source, 'miniapp') AS source, subscription_id
+               FROM purchase_requests
+               WHERE user_id = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            (str(user_id), limit),
+        ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        rm = d.get("result_msg")
+        if isinstance(rm, str) and len(rm) > 400:
+            d["result_msg"] = rm[:397] + "…"
+        out.append(d)
+    return {"purchases": out}
 
 
 @app.get("/api/purchase/{purchase_id}/status")

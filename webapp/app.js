@@ -194,6 +194,8 @@ const state = {
   pickerTarget: null,
   screenStack: ["screenMain"],
   activeSubs: {},
+  /** So'nggi yuklangan xarid topshiriqlari (kuzatuvlar ekranida qayta chizish uchun) */
+  recentPurchases: [],
   searchHistory: [],
 };
 
@@ -357,7 +359,7 @@ function showScreen(id) {
     screenTrainBrand:    "Poyezd turi",
     screenComfort:       "Joy turi",
     screenResults:       "Natijalar",
-    screenSubscriptions: "🔔 Kuzatishlarim",
+    screenSubscriptions: "🔔 Kuzatishlar / xaridlar",
     screenProfile:       "👤 Profil",
   };
   document.getElementById("headerTitle").textContent = titles[id] || "";
@@ -1180,8 +1182,11 @@ async function goToSubscriptions() {
   }
   showLoading(true, "Yuklanmoqda...");
   try {
-    const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
-    renderSubscriptions(res.subscriptions || []);
+    const [res, resPur] = await Promise.all([
+      apiFetch(`/api/subscriptions/${TG_USER_ID}`),
+      apiFetch(`/api/purchase-requests/${TG_USER_ID}?limit=50`).catch(() => ({ purchases: [] })),
+    ]);
+    renderSubscriptions(res.subscriptions || [], resPur.purchases || []);
     showScreen("screenSubscriptions");
   } catch {
     showToast("Ma'lumot olishda xatolik.");
@@ -1190,37 +1195,72 @@ async function goToSubscriptions() {
   }
 }
 
-function renderSubscriptions(subs) {
-  const container = document.getElementById("subsList");
-  state.activeSubs = {};
+function purchaseStatusLabel(st) {
+  const k = String(st || "").toLowerCase();
+  const m = {
+    pending: "⏳ Kutilmoqda",
+    success: "✅ Bajarildi",
+    partial: "⚠️ Qisman",
+    error: "❌ Xato",
+  };
+  return m[k] || (st ? String(st) : "—");
+}
 
-  if (!subs.length) {
-    container.innerHTML = `
-      <div class="subs-empty">
-        <div class="subs-empty-icon">🔕</div>
-        <h3>Kuzatishlar yo'q</h3>
-        <p>Poyezd qidirganda natijalar ekranidagi kuzatuv tugmasini bosing — hozir chipta ko'rinmasa ham bot har 10 daqiqada tekshiradi va bilet yoki bo'sh joy paydo bo'lishi bilanoq bildirishnoma yuboradi.</p>
+function purchaseSourceLabel(src) {
+  if (src === "watch") return "🔔 Kuzatuvdan avto";
+  return "📱 Mini App";
+}
+
+function purchaseCardHtml(p) {
+  const src = purchaseSourceLabel(p.source);
+  const st = purchaseStatusLabel(p.status);
+  const msg = escHtmlText(String(p.result_msg || "").replace(/\s+/g, " ").trim().slice(0, 240));
+  const t = escHtmlText(String(p.created_at || "").replace("T", " ").slice(0, 19));
+  const stRaw = String(p.status || "pending").toLowerCase().replace(/[^a-z]/g, "") || "pending";
+  const stCls = "purchase-status-" + stRaw;
+  return `
+      <div class="purchase-card" data-purchase-id="${p.id}">
+        <div class="purchase-icon">🎫</div>
+        <div class="purchase-info">
+          <div class="purchase-route">${escHtmlText(p.from_name)} → ${escHtmlText(p.to_name)}</div>
+          <div class="purchase-meta">📅 ${escHtmlText(p.date)} · 🚆 ${escHtmlText(p.train_brand || "")} №${escHtmlText(String(p.train_number || ""))}</div>
+          <div class="purchase-meta">⏱ ${escHtmlText(p.dep_time || "")} → ${escHtmlText(p.arr_time || "")} · ${escHtmlText(p.car_type || "")}</div>
+          <div class="purchase-row">
+            <span class="purchase-src">${src}</span>
+            <span class="purchase-status ${stCls}">${st}</span>
+          </div>
+          ${msg ? `<div class="purchase-msg">${msg}</div>` : ""}
+          <div class="purchase-time">${t}</div>
+        </div>
       </div>`;
-    return;
-  }
+}
 
-  // Refresh local cache
-  subs.forEach(s => {
-    state.activeSubs[subKeyFromServerRow(s)] = s.id;
-  });
+function renderSubscriptions(subs, purchases) {
+  const container = document.getElementById("subsList");
+  subs = subs || [];
+  purchases = purchases || [];
+  state.activeSubs = {};
+  state.recentPurchases = purchases;
 
-  container.innerHTML = `
-    <p class="subs-section-title">${subs.length} ta faol kuzatuv</p>
-    ${subs.map(s => {
-      const tbL = trainBrandCsvLabelFromServer(s.train_brand);
-      const ccL = comfortCsvLabelFromServer(s.comfort_class);
-      return `
+  const blocks = [];
+
+  if (subs.length) {
+    subs.forEach((s) => {
+      state.activeSubs[subKeyFromServerRow(s)] = s.id;
+    });
+    blocks.push(`<p class="subs-section-title">Faol kuzatuvlar (${subs.length})</p>`);
+    blocks.push(
+      subs
+        .map((s) => {
+          const tbL = trainBrandCsvLabelFromServer(s.train_brand);
+          const ccL = comfortCsvLabelFromServer(s.comfort_class);
+          return `
       <div class="sub-card" id="sub-${s.id}">
         <div class="sub-icon">🚆</div>
         <div class="sub-info">
           <div class="sub-route">${s.from_name} → ${s.to_name}</div>
           ${subCardReysLineHtml(s)}
-          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ Qidiruv: ${s.time_from||"00:00"}–${s.time_to||"23:59"}` : ""}${tbL ? `&nbsp;🚄 ${tbL}` : ""}${ccL ? `&nbsp;🪑 ${ccL}` : ""}</div>
+          <div class="sub-date">📅 ${s.date}${s.time_from || s.time_to ? `&nbsp;⏰ Qidiruv: ${s.time_from || "00:00"}–${s.time_to || "23:59"}` : ""}${tbL ? `&nbsp;🚄 ${tbL}` : ""}${ccL ? `&nbsp;🪑 ${ccL}` : ""}</div>
           <span class="sub-status">${s.auto_buy ? "🤖 Avtomatik xarid" : "⏳ Faqat xabar"} (har 10 daqiqa)</span>
           <div class="sub-actions">
             ${Number(s.auto_buy) ? `<button type="button" class="sub-action-btn" onclick="disableSubAutoBuy(${s.id})">🤖 Avtoni o'chirish</button>` : ""}
@@ -1228,7 +1268,29 @@ function renderSubscriptions(subs) {
           </div>
         </div>
       </div>`;
-    }).join("")}`;
+        })
+        .join(""),
+    );
+  } else {
+    blocks.push(`<p class="subs-section-title">Faol kuzatuvlar</p>`);
+    blocks.push(`
+      <div class="subs-empty subs-empty-inline">
+        <div class="subs-empty-icon">🔕</div>
+        <h3>Hozircha kuzatuv yo'q</h3>
+        <p>Natijalar ekranidagi kuzatuv tugmasi orqali qo'shasiz. Pastda avtomatik / qo'lda yuborilgan chipta topshiriqlari ko'rinadi.</p>
+      </div>`);
+  }
+
+  if (purchases.length) {
+    blocks.push(`<p class="subs-section-title">Chipta topshiriqlari (${purchases.length})</p>`);
+    blocks.push(`<p class="subs-hint">Kuzatuvdan avtomatik xarid yoki «Chipta olish» — holat serverda yangilanadi.</p>`);
+    blocks.push(purchases.map((p) => purchaseCardHtml(p)).join(""));
+  } else if (!subs.length) {
+    blocks.push(`<p class="subs-section-title">Chipta topshiriqlari</p>`);
+    blocks.push(`<div class="subs-empty subs-empty-inline"><p>Hozircha topshiriq yo'q.</p></div>`);
+  }
+
+  container.innerHTML = blocks.join("");
 }
 
 async function disableSubAutoBuy(subId) {
@@ -1243,8 +1305,11 @@ async function disableSubAutoBuy(subId) {
       body: JSON.stringify({ user_id: TG_USER_ID, auto_buy: false }),
     });
     showToast("✅ Avtomatik sotib olish o'chirildi. Joy chiqsa faqat xabar keladi.");
-    const res = await apiFetch(`/api/subscriptions/${TG_USER_ID}`);
-    renderSubscriptions(res.subscriptions || []);
+    const [res, resPur] = await Promise.all([
+      apiFetch(`/api/subscriptions/${TG_USER_ID}`),
+      apiFetch(`/api/purchase-requests/${TG_USER_ID}?limit=50`).catch(() => ({ purchases: [] })),
+    ]);
+    renderSubscriptions(res.subscriptions || [], resPur.purchases || []);
     updateBellBadge();
   } catch {
     showToast("Xatolik. Qayta urinib ko'ring.");
@@ -1261,7 +1326,7 @@ async function deleteSubFromList(subId, subKey) {
     updateBellBadge();
     // If list is now empty, show empty state
     if (!document.querySelector(".sub-card")) {
-      renderSubscriptions([]);
+      renderSubscriptions([], state.recentPurchases || []);
     }
     showToast("🔕 Bekor qilindi.");
   } catch {

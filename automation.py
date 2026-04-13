@@ -2903,6 +2903,119 @@ def _passenger_log_hint(field: str, value: str) -> str:
     return f"uzunlik={len(v)}"
 
 
+async def _try_fill_citizenship_dropdown(page, citizenship: str) -> bool:
+    """
+    Angular Material mat-select yoki yashirin <select> — UZB / Oʻzbekiston varianti.
+    Oddiy querySelector('select') ko'pincha ishlamaydi.
+    """
+    raw = (citizenship or "").strip()
+    if not raw:
+        return True
+    code = raw.upper()
+    needles: list[str] = [code.lower(), raw.lower()]
+    if code in ("UZ", "UZB", "860") or "UZB" in code:
+        needles.extend(
+            [
+                "uzb",
+                "860",
+                "uzbek",
+                "o'zbek",
+                "o‘zbek",
+                "oʻzbek",
+                "ўзб",
+                "узб",
+                "ўзбекистон",
+                "o'zbekiston",
+                "o‘zbekiston",
+                "oʻzbekiston",
+            ]
+        )
+    needles = list(dict.fromkeys(n for n in needles if n))
+
+    trigger_sels = (
+        "mat-select[formcontrolname*='citizen' i]",
+        "mat-select[formcontrolname*='national' i]",
+        "mat-select[formcontrolname*='country' i]",
+        "mat-select[formcontrolname*='nation' i]",
+        "mat-select[placeholder*='fuqaro' i]",
+        "mat-select[placeholder*='Fuqaro' i]",
+        "mat-select[aria-label*='fuqaro' i]",
+        "mat-select[aria-label*='Fuqaro' i]",
+    )
+    for tsel in trigger_sels:
+        loc = page.locator(tsel).first
+        try:
+            if await loc.count() == 0:
+                continue
+            if not await loc.is_visible():
+                continue
+            await loc.scroll_into_view_if_needed()
+            await loc.click(timeout=2500)
+            await page.wait_for_timeout(400)
+            opts = page.locator(
+                ".cdk-overlay-container mat-option, "
+                ".cdk-overlay-container .mat-mdc-option, "
+                "div.mat-mdc-select-panel mat-option"
+            )
+            n = await opts.count()
+            for i in range(min(n, 80)):
+                opt = opts.nth(i)
+                try:
+                    if not await opt.is_visible():
+                        continue
+                    blob = ((await opt.inner_text()) or "").lower()
+                    val = ((await opt.get_attribute("value")) or "").lower()
+                    idv = ((await opt.get_attribute("id")) or "").lower()
+                    hay = f"{blob} {val} {idv}"
+                    if any(nl and nl in hay for nl in needles):
+                        await opt.click(timeout=2500)
+                        await page.wait_for_timeout(250)
+                        logger.info(
+                            "[buy][passenger] filled field=citizenship (mat-select) trigger=%s",
+                            tsel,
+                        )
+                        return True
+                except Exception:
+                    continue
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(150)
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            continue
+
+    try:
+        selects = page.locator("select")
+        sc = await selects.count()
+        for i in range(min(sc, 12)):
+            sel = selects.nth(i)
+            try:
+                if not await sel.is_visible():
+                    continue
+                opts = await sel.evaluate(
+                    """(el) => Array.from(el.options || []).map(o => ({
+                        v: String(o.value||''),
+                        t: String(o.textContent||'').toLowerCase()
+                    }))"""
+                )
+                for o in opts or []:
+                    hay = f"{o.get('v','').lower()} {o.get('t','')}"
+                    if any(nl and nl in hay for nl in needles):
+                        await sel.select_option(value=o.get("v") or "")
+                        logger.info(
+                            "[buy][passenger] filled field=citizenship (native select) idx=%s",
+                            i,
+                        )
+                        return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 async def _fill_passenger(page, passenger: dict) -> None:
     name = (passenger.get("full_name") or "").strip()
     passport = (passenger.get("passport") or "").strip()
@@ -3115,26 +3228,78 @@ async def _fill_passenger(page, passenger: dict) -> None:
             )
         return False
 
-    await _fill_by_selectors(
-        name,
-        [
-            "input[placeholder*='Familiya' i]",
-            "input[placeholder*='ФИО' i]",
-            "input[placeholder*='Имя' i]",
-            "input[placeholder*='ism' i]",
-            "input[autocomplete='name']",
-            "input[name*='first' i]",
-            "input[name*='last' i]",
-            "input[name*='full' i][name*='name' i]",
-            "input[name*='fio' i]",
-            "input[name*='name' i]",
-            "input[formcontrolname*='name' i]",
-            "input[formcontrolname*='first' i]",
-            "input[formcontrolname*='last' i]",
-            "input[type='text']",
-        ],
-        "full_name",
-    )
+    # Familiya / Ism / Sharif alohida — bitta qatorni faqat «Familiya»ga yozish Ismni bo'sh qoldiradi.
+    name_parts = [p for p in (name or "").split() if p]
+    last_n = name_parts[0] if name_parts else ""
+    first_n = name_parts[1] if len(name_parts) > 1 else ""
+    mid_n = " ".join(name_parts[2:]) if len(name_parts) > 2 else ""
+
+    if last_n:
+        await _fill_by_selectors(
+            last_n,
+            [
+                "input[name='lastname' i]",
+                "input[name='lastName' i]",
+                "input[formcontrolname='lastname' i]",
+                "input[formcontrolname='lastName' i]",
+                "input[formcontrolname*='last' i][name*='last' i]",
+                "input[placeholder*='Familiya' i]",
+                "input[placeholder*='Фамилия' i]",
+            ],
+            "lastname",
+        )
+    if first_n:
+        await _fill_by_selectors(
+            first_n,
+            [
+                "input[name='firstname' i]",
+                "input[name='firstName' i]",
+                "input[formcontrolname='firstname' i]",
+                "input[formcontrolname='firstName' i]",
+                "input[formcontrolname*='first' i][name*='first' i]",
+                "input[placeholder*='Ism' i]",
+                "input[placeholder*='Имя' i]",
+            ],
+            "firstname",
+        )
+    if mid_n:
+        await _fill_by_selectors(
+            mid_n,
+            [
+                "input[name='mid' i]",
+                "input[name='midname' i]",
+                "input[name='middleName' i]",
+                "input[formcontrolname='midname' i]",
+                "input[formcontrolname='middleName' i]",
+                "input[formcontrolname*='mid' i]",
+                "input[placeholder*='Otasining' i]",
+                "input[placeholder*='Sharif' i]",
+                "input[placeholder*='Отчество' i]",
+            ],
+            "midname",
+            log_fail=False,
+        )
+    if name and not last_n:
+        await _fill_by_selectors(
+            name,
+            [
+                "input[placeholder*='Familiya' i]",
+                "input[placeholder*='ФИО' i]",
+                "input[placeholder*='Имя' i]",
+                "input[placeholder*='ism' i]",
+                "input[autocomplete='name']",
+                "input[name*='first' i]",
+                "input[name*='last' i]",
+                "input[name*='full' i][name*='name' i]",
+                "input[name*='fio' i]",
+                "input[name*='name' i]",
+                "input[formcontrolname*='name' i]",
+                "input[formcontrolname*='first' i]",
+                "input[formcontrolname*='last' i]",
+                "input[type='text']",
+            ],
+            "full_name",
+        )
     await _fill_by_selectors(
         passport,
         [
@@ -3254,20 +3419,25 @@ async def _fill_passenger(page, passenger: dict) -> None:
             "[buy][passenger] skip field=gender sabab=profilda_male_female_yo'q yoki_noto'g'ri",
         )
 
-    cit_input_ok = await _fill_by_selectors(
-        citizenship,
-        [
-            "input[name*='citizen' i]",
-            "input[name*='nation' i]",
-            "input[placeholder*='fuqaro' i], input[placeholder*='гражд' i], input[placeholder*='citizen' i]",
-            "input[formcontrolname*='citizen' i]",
-        ],
-        "citizenship",
-    )
-    if citizenship:
+    cit_pw = await _try_fill_citizenship_dropdown(page, citizenship)
+    cit_input_ok = False
+    if not cit_pw:
+        cit_input_ok = await _fill_by_selectors(
+            citizenship,
+            [
+                "input[name*='citizen' i]",
+                "input[name*='nation' i]",
+                "input[placeholder*='fuqaro' i], input[placeholder*='гражд' i], input[placeholder*='citizen' i]",
+                "input[formcontrolname*='citizen' i]",
+            ],
+            "citizenship",
+        )
+    ok_c = False
+    if citizenship and not cit_pw:
         try:
-            ok_c = await page.evaluate(
-                """(raw) => {
+            ok_c = bool(
+                await page.evaluate(
+                    """(raw) => {
                     const code = String(raw || '').trim().toUpperCase();
                     if (!code) return false;
                     const extra = [];
@@ -3294,21 +3464,28 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     }
                     return false;
                 }""",
-                citizenship,
+                    citizenship,
+                )
             )
             if ok_c:
                 logger.info("[buy][passenger] filled field=citizenship (select)=%s", citizenship)
-            elif not cit_input_ok:
-                logger.warning(
-                    "[buy][passenger] not_filled field=citizenship sabab=input_va_select_muvaffaqiyatsiz qiymat=%s",
-                    _passenger_log_hint("citizenship", citizenship),
-                )
-            else:
-                logger.info(
-                    "[buy][passenger] citizenship select_topilmadi lekin_input_bilan_to'ldirilgan deb_qoldi",
-                )
         except Exception as ex:
             logger.warning("[buy][passenger] citizenship select xato: %s", ex)
+
+    if citizenship and not cit_pw and not cit_input_ok and not ok_c:
+        logger.warning(
+            "[buy][passenger] not_filled field=citizenship sabab=input_va_select_muvaffaqiyatsiz qiymat=%s",
+            _passenger_log_hint("citizenship", citizenship),
+        )
+
+    try:
+        await page.locator("body").click(position={"x": 4, "y": 4}, timeout=2000)
+    except Exception:
+        try:
+            await page.keyboard.press("Tab")
+        except Exception:
+            pass
+    await page.wait_for_timeout(350)
 
     logger.info("[buy][passenger] forma_to'ldirish_bosqichi_yakunlandi")
 
@@ -3444,6 +3621,7 @@ async def _decline_insurance_if_present(page) -> None:
 
 async def _click_continue_to_payment(page) -> bool:
     await _decline_insurance_if_present(page)
+    await page.wait_for_timeout(450)
 
     names = (
         "Продолжить",
@@ -3455,22 +3633,32 @@ async def _click_continue_to_payment(page) -> bool:
         "Тўлов",
         "Оплатить",
     )
-    for n in names:
-        btn = page.get_by_role("button", name=re.compile(re.escape(n), re.I)).first
-        if await btn.count():
-            try:
-                await btn.scroll_into_view_if_needed()
-                await btn.click(timeout=8000)
-                await page.wait_for_timeout(2000)
-                return True
-            except Exception:
+    for attempt in range(2):
+        for n in names:
+            btn = page.get_by_role("button", name=re.compile(re.escape(n), re.I)).first
+            if await btn.count():
                 try:
-                    await btn.click(timeout=8000, force=True)
+                    dis = await btn.get_attribute("disabled")
+                    aria = await btn.get_attribute("aria-disabled")
+                    if dis is not None or (aria or "").lower() == "true":
+                        logger.info(
+                            "[buy] «%s» tugmasi hali disabled — force va qayta urinish",
+                            n,
+                        )
+                    await btn.scroll_into_view_if_needed()
+                    await btn.click(timeout=8000)
                     await page.wait_for_timeout(2000)
                     return True
                 except Exception:
-                    pass
-                continue
+                    try:
+                        await btn.click(timeout=8000, force=True)
+                        await page.wait_for_timeout(2000)
+                        return True
+                    except Exception:
+                        pass
+                    continue
+        if attempt == 0:
+            await page.wait_for_timeout(900)
     legacy = page.locator(
         "button:has-text('Продолжить'), button:has-text('Далее'), "
         "button:has-text('К оплате'), button:has-text('Davom'), "
@@ -3483,7 +3671,12 @@ async def _click_continue_to_payment(page) -> bool:
             await page.wait_for_timeout(2000)
             return True
         except Exception:
-            pass
+            try:
+                await legacy.click(timeout=8000, force=True)
+                await page.wait_for_timeout(2000)
+                return True
+            except Exception:
+                pass
     try:
         js_ok = await page.evaluate(
             """() => {
@@ -3493,13 +3686,18 @@ async def _click_continue_to_payment(page) -> bool:
                     const r = el.getBoundingClientRect();
                     return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 10 && r.height > 10;
                 };
-                const pick = all.find((el) => {
+                const wants = (el) => {
                     const t = String(el.textContent || '').toLowerCase();
-                    const c = String(el.className || '').toLowerCase();
-                    const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || c.includes('disabled');
-                    if (disabled || !visible(el)) return false;
                     return t.includes('davom') || t.includes('продолж') || t.includes('далее') || t.includes("to'lov") || t.includes('к оплате');
-                });
+                };
+                const enabled = (el) => {
+                    const c = String(el.className || '').toLowerCase();
+                    return !(el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || c.includes('disabled'));
+                };
+                let pick = all.find((el) => enabled(el) && visible(el) && wants(el));
+                if (!pick) {
+                    pick = all.find((el) => visible(el) && wants(el));
+                }
                 if (!pick) return false;
                 pick.scrollIntoView({ block: 'center', inline: 'center' });
                 pick.click();
