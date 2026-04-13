@@ -24,6 +24,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
+from passenger_profile import (
+    FIELD_LABELS_UZ,
+    missing_fields_message_uz,
+    passenger_missing_fields,
+)
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -914,7 +920,11 @@ async def get_passenger(user_id: str):
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
-    return dict(row)
+    d = dict(row)
+    missing = passenger_missing_fields(d)
+    d["profile_complete"] = len(missing) == 0
+    d["missing_fields"] = missing
+    return d
 
 
 # ── PURCHASE ──────────────────────────────────────────────────────────────────
@@ -942,6 +952,19 @@ async def purchase_ticket(req: PurchaseRequest):
         ).fetchone()
         if not passenger:
             raise HTTPException(status_code=400, detail="Avval yo'lovchi ma'lumotini kiriting")
+
+        pdict = dict(passenger)
+        missing = passenger_missing_fields(pdict)
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": missing_fields_message_uz(missing)
+                    + " Mini App → Profil yoki /myinfo",
+                    "missing": missing,
+                    "missing_labels_uz": [FIELD_LABELS_UZ.get(m, m) for m in missing],
+                },
+            )
 
         # Xarid so'rovini saqlash
         cur = conn.execute(

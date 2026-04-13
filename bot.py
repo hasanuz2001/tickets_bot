@@ -32,6 +32,12 @@ from telegram.ext import (
 
 load_dotenv()
 
+from passenger_profile import (
+    missing_fields_message_uz,
+    passenger_missing_fields,
+    is_valid_birth_date_iso,
+)
+
 
 def _normalize_webapp_url(raw: str) -> str:
     u = (raw or "").strip().rstrip("/")
@@ -326,22 +332,53 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── YO'LOVCHI MA'LUMOTI ────────────────────────────────────────────────────────
-PASS_NAME, PASS_PASSPORT, PASS_PHONE = range(20, 23)
+PASS_NAME, PASS_PASSPORT, PASS_PHONE, PASS_BIRTH, PASS_GENDER, PASS_CITIZENSHIP = range(20, 26)
+
+
+def _pop_passenger_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for k in (
+        "pass_name",
+        "pass_passport",
+        "pass_phone",
+        "pass_birth",
+        "pass_gender",
+        "pass_citizenship",
+    ):
+        context.user_data.pop(k, None)
 
 
 async def passenger_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
+    _pop_passenger_draft(context)
     # Avvalgi ma'lumot bormi?
     try:
         async with _httpx.AsyncClient(timeout=8) as client:
             r = await client.get(f"{SERVER_URL}/api/passenger/{user_id}")
             if r.status_code == 200:
                 p = r.json()
+                missing = p.get("missing_fields")
+                if missing is None:
+                    missing = passenger_missing_fields(p)
+                lines = [
+                    f"👤 {p.get('full_name', '')}",
+                    f"📄 {p.get('passport', '')}",
+                    f"📱 {p.get('phone', '')}",
+                ]
+                if p.get("birth_date"):
+                    lines.append(f"📅 Tug'ilgan: {p['birth_date']}")
+                if p.get("gender"):
+                    lines.append(f"⚧ Jins: {p['gender']}")
+                if p.get("citizenship"):
+                    lines.append(f"🌐 Fuqarolik: {p['citizenship']}")
+                body = "\n".join(lines)
+                warn = ""
+                if missing:
+                    warn = (
+                        f"\n\n⚠️ <b>Yetishmayapti:</b>\n"
+                        f"{missing_fields_message_uz(missing)}"
+                    )
                 await update.message.reply_text(
-                    f"📋 <b>Saqlangan ma'lumotlar:</b>\n\n"
-                    f"👤 {p['full_name']}\n"
-                    f"📄 {p['passport']}\n"
-                    f"📱 {p['phone']}\n\n"
+                    f"📋 <b>Saqlangan ma'lumotlar:</b>\n\n{body}{warn}\n\n"
                     "O'zgartirish uchun <b>to'liq ismingizni</b> yuboring:\n"
                     "<i>(Bekor qilish: /cancel)</i>",
                     parse_mode="HTML",
@@ -351,7 +388,8 @@ async def passenger_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text(
             "👤 <b>Yo'lovchi ma'lumotlarini kiriting</b>\n\n"
-            "Bu ma'lumotlar chipta xarid qilish uchun ishlatiladi.\n\n"
+            "Bu ma'lumotlar chipta xarid qilish uchun ishlatiladi "
+            "(ism, passport, telefon, tug'ilgan sana, jins, fuqarolik).\n\n"
             "📝 <b>To'liq ismingizni</b> yuboring (pasportdagi kabi):\n"
             "<i>(Bekor qilish: /cancel)</i>",
             parse_mode="HTML",
@@ -360,7 +398,7 @@ async def passenger_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def passenger_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["pass_name"] = update.message.text.strip()
+    context.user_data["pass_name"] = update.message.text.strip().upper()
     await update.message.reply_text(
         "📄 <b>Passport raqamingizni</b> yuboring:\n"
         "<i>Masalan: AA1234567</i>",
@@ -380,25 +418,117 @@ async def passenger_passport(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def passenger_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
     phone = update.message.text.strip()
+    if not phone.startswith("+"):
+        await update.message.reply_text(
+            "📱 Telefon <b>+</b> bilan boshlanishi kerak.\n"
+            "<i>Masalan: +998901234567</i>",
+            parse_mode="HTML",
+        )
+        return PASS_PHONE
+    context.user_data["pass_phone"] = phone
+    await update.message.reply_text(
+        "📅 <b>Tug'ilgan sanangiz</b> — <code>YYYY-MM-DD</code> formatda yuboring\n"
+        "<i>Masalan: 1995-08-22</i>",
+        parse_mode="HTML",
+    )
+    return PASS_BIRTH
+
+
+async def passenger_birth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = update.message.text.strip()
+    if not is_valid_birth_date_iso(raw):
+        await update.message.reply_text(
+            "Noto'g'ri format. Qayta <code>YYYY-MM-DD</code> yuboring (1995-08-22):",
+            parse_mode="HTML",
+        )
+        return PASS_BIRTH
+    context.user_data["pass_birth"] = raw
+    keyboard = [[
+        InlineKeyboardButton("Erkak", callback_data="passgender_male"),
+        InlineKeyboardButton("Ayol", callback_data="passgender_female"),
+    ]]
+    await update.message.reply_text(
+        "⚧ <b>Jinsni</b> tanlang:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return PASS_GENDER
+
+
+async def passenger_gender_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    gender = query.data.replace("passgender_", "", 1)
+    context.user_data["pass_gender"] = gender
+    label = "Erkak" if gender == "male" else "Ayol"
+    await query.edit_message_text(f"✅ Jins: {label}")
+    await query.message.reply_text(
+        "🌐 <b>Fuqarolik</b> — 3 harfli kod yuboring\n"
+        "<i>O'zbekiston: UZB; Qozog'iston: KAZ</i>",
+        parse_mode="HTML",
+    )
+    return PASS_CITIZENSHIP
+
+
+async def passenger_gender_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    t = update.message.text.strip().lower()
+    if t in ("male", "m", "erkak", "e"):
+        g = "male"
+    elif t in ("female", "f", "ayol", "a"):
+        g = "female"
+    else:
+        await update.message.reply_text(
+            "Tugmalardan birini bosing yoki <code>male</code> / <code>female</code> deb yozing.",
+            parse_mode="HTML",
+        )
+        return PASS_GENDER
+    context.user_data["pass_gender"] = g
+    await update.message.reply_text(
+        "🌐 <b>Fuqarolik</b> — 3 harfli kod (UZB, KAZ, …):",
+        parse_mode="HTML",
+    )
+    return PASS_CITIZENSHIP
+
+
+async def passenger_citizenship(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    code = update.message.text.strip().upper()
+    if len(code) != 3 or not code.isalpha():
+        await update.message.reply_text(
+            "Kod aniq 3 ta harf bo'lishi kerak (masalan: UZB, KAZ). Qayta yuboring:"
+        )
+        return PASS_CITIZENSHIP
+
     name = context.user_data.get("pass_name", "")
     passport = context.user_data.get("pass_passport", "")
+    phone = context.user_data.get("pass_phone", "")
+    birth = context.user_data.get("pass_birth")
+    gender = context.user_data.get("pass_gender")
 
     try:
         async with _httpx.AsyncClient(timeout=8) as client:
-            r = await client.post(f"{SERVER_URL}/api/passenger", json={
-                "user_id": user_id,
-                "full_name": name,
-                "passport": passport,
-                "phone": phone,
-            })
+            r = await client.post(
+                f"{SERVER_URL}/api/passenger",
+                json={
+                    "user_id": user_id,
+                    "full_name": name,
+                    "passport": passport,
+                    "phone": phone,
+                    "birth_date": birth,
+                    "gender": gender,
+                    "citizenship": code,
+                },
+            )
             r.raise_for_status()
         await update.message.reply_text(
             f"✅ <b>Ma'lumotlar saqlandi!</b>\n\n"
             f"👤 {name}\n"
             f"📄 {passport}\n"
-            f"📱 {phone}\n\n"
+            f"📱 {phone}\n"
+            f"📅 {birth}\n"
+            f"⚧ {gender}\n"
+            f"🌐 {code}\n\n"
             "Endi Mini App da chipta topib, <b>«🎫 Chipta olish»</b> tugmasini bosing.",
             parse_mode="HTML",
         )
@@ -432,6 +562,17 @@ async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(
                 "⚠️ Avval yo'lovchi ma'lumotlarini kiriting!\n\n"
                 "/myinfo buyrug'ini yuboring.",
+                parse_mode="HTML",
+            )
+            return
+
+        missing = passenger_missing_fields(passenger)
+        if missing:
+            await update.message.reply_text(
+                "⚠️ <b>Profil to'liq emas</b>\n\n"
+                f"{missing_fields_message_uz(missing)}\n\n"
+                "Mini App ichidagi <b>Profil</b> bo'limida to'ldiring yoki "
+                "<code>/myinfo</code> orqali barcha savollarga javob bering.",
                 parse_mode="HTML",
             )
             return
@@ -478,6 +619,14 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     train = data.get("train", {})
     try:
         async with _httpx.AsyncClient(timeout=10) as client:
+            pr = await client.get(f"{SERVER_URL}/api/passenger/{user_id}")
+            pr.raise_for_status()
+            if passenger_missing_fields(pr.json()):
+                await query.edit_message_text(
+                    "⚠️ Profil to'liq emas. /myinfo yoki Mini App → Profil.",
+                    parse_mode="HTML",
+                )
+                return
             r = await client.post(f"{SERVER_URL}/api/purchase", json={
                 "user_id":      user_id,
                 "from_code":    data.get("from_code"),
@@ -491,6 +640,18 @@ async def confirm_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 "arr_time":     train.get("arr"),
                 "car_type":     train.get("car_type"),
             })
+            if r.status_code == 400:
+                try:
+                    err_body = r.json()
+                    d = err_body.get("detail")
+                    if isinstance(d, dict):
+                        msg = d.get("message", str(d))
+                    else:
+                        msg = str(d) if d else r.text
+                except Exception:
+                    msg = r.text or "400"
+                await query.edit_message_text(f"❌ {msg}")
+                return
             r.raise_for_status()
         await query.edit_message_text(
             "⏳ Chipta xaridi boshlandi!\n\n"
@@ -544,6 +705,12 @@ def main():
             PASS_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_name)],
             PASS_PASSPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_passport)],
             PASS_PHONE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_phone)],
+            PASS_BIRTH:    [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_birth)],
+            PASS_GENDER:   [
+                CallbackQueryHandler(passenger_gender_pick, pattern="^passgender_(male|female)$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_gender_text),
+            ],
+            PASS_CITIZENSHIP: [MessageHandler(filters.TEXT & ~filters.COMMAND, passenger_citizenship)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )

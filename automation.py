@@ -2833,6 +2833,25 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
     logger.warning("[buy] Avtomatik random joy tanlash topilmadi (keyingi bosqichga o'tiladi)")
 
 
+def _passenger_log_hint(field: str, value: str) -> str:
+    """Log uchun: passport/telefonni to'liq yozmaymiz."""
+    v = (value or "").strip()
+    if not v:
+        return "(bo'sh)"
+    if field in ("passport", "phone"):
+        return f"uzunlik={len(v)} oxirgi_4=***{v[-4:]}" if len(v) >= 4 else f"uzunlik={len(v)}"
+    if field == "full_name":
+        parts = v.split()
+        if len(parts) >= 2:
+            return f"so'zlar={len(parts)} namuna={parts[0][:1]}*** {parts[-1][:1]}***"
+        return f"uzunlik={len(v)}"
+    if field.startswith("birth_date"):
+        return v[:16]
+    if field == "citizenship":
+        return v[:24]
+    return f"uzunlik={len(v)}"
+
+
 async def _fill_passenger(page, passenger: dict) -> None:
     name = (passenger.get("full_name") or "").strip()
     passport = (passenger.get("passport") or "").strip()
@@ -2841,13 +2860,13 @@ async def _fill_passenger(page, passenger: dict) -> None:
     gender = (passenger.get("gender") or "").strip().lower()
     citizenship = (passenger.get("citizenship") or "").strip()
     logger.info(
-        "[buy] Passenger profile: name=%s passport=%s phone=%s birth=%s gender=%s citizen=%s",
-        bool(name),
-        bool(passport),
-        bool(phone),
-        bool(birth_date),
-        bool(gender),
-        bool(citizenship),
+        "[buy][passenger] profile: full_name=%s passport=%s phone=%s birth_date=%s gender=%s citizenship=%s",
+        _passenger_log_hint("full_name", name),
+        _passenger_log_hint("passport", passport),
+        _passenger_log_hint("phone", phone),
+        _passenger_log_hint("birth_date", birth_date),
+        gender or "(yo'q)",
+        citizenship or "(yo'q)",
     )
 
     async def _reveal_passenger_form() -> None:
@@ -2932,7 +2951,7 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     except Exception:
                         continue
 
-    async def _diag_passenger_fields() -> None:
+    async def _diag_passenger_fields(step: str) -> None:
         try:
             d = await page.evaluate(
                 """() => {
@@ -2953,19 +2972,47 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     return { all: all.length, visible: v.length, sample };
                 }"""
             )
-            logger.info("[buy] passenger_fields_diag: %s", d)
+            logger.info(
+                "[buy][passenger] diag step=%s jami_input=%s ko'rinadigan=%s namuna=%s",
+                step,
+                d.get("all"),
+                d.get("visible"),
+                d.get("sample"),
+            )
         except Exception as ex:
-            logger.warning("[buy] passenger_fields_diag xato: %s", ex)
+            logger.warning("[buy][passenger] diag xato step=%s: %s", step, ex)
 
+    logger.info("[buy][passenger] bosqich: forma_ochish (expansion/header)")
     await _reveal_passenger_form()
+    await _diag_passenger_fields("reveal_keyin")
+
+    logger.info("[buy][passenger] bosqich: yo'lovchi_blok_tugmalari")
     await _open_passenger_block_if_needed()
     await page.wait_for_timeout(600)
-    await _deselect_to_single_seat(page)
-    await _diag_passenger_fields()
+    await _diag_passenger_fields("open_block_keyin")
 
-    async def _fill_by_selectors(value: str, selectors: list[str], label: str) -> bool:
-        if not value:
+    logger.info("[buy][passenger] bosqich: bitta_joy_tekshiruvi")
+    await _deselect_to_single_seat(page)
+    await _diag_passenger_fields("deselect_keyin")
+
+    async def _fill_by_selectors(
+        value: str,
+        selectors: list[str],
+        label: str,
+        *,
+        log_fail: bool = True,
+    ) -> bool:
+        if not (value or "").strip():
+            logger.info("[buy][passenger] skip field=%s sabab=profilda_qiymat_yo'q", label)
             return False
+        hint = _passenger_log_hint(label, value)
+        logger.info(
+            "[buy][passenger] fill_start field=%s qiymat=%s selectorlar_soni=%s",
+            label,
+            hint,
+            len(selectors),
+        )
+        last_err: str | None = None
         for sel in selectors:
             loc = page.locator(sel)
             cnt = await loc.count()
@@ -2979,6 +3026,7 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     except Exception:
                         pass
                     if not await el.is_visible():
+                        last_err = "visible_emas"
                         continue
                     try:
                         await el.click(timeout=1500)
@@ -2998,11 +3046,22 @@ async def _fill_passenger(page, passenger: dict) -> None:
                         await el.dispatch_event("change")
                     except Exception:
                         pass
-                    logger.info("[buy] Passenger filled: %s via %s[%s]", label, sel, i)
+                    logger.info(
+                        "[buy][passenger] filled field=%s selector=%s idx=%s",
+                        label,
+                        sel,
+                        i,
+                    )
                     return True
-                except Exception:
+                except Exception as ex:
+                    last_err = type(ex).__name__
                     continue
-        logger.warning("[buy] Passenger field not filled: %s", label)
+        if log_fail:
+            logger.warning(
+                "[buy][passenger] not_filled field=%s sabab=barcha_urinishlar_yechilmadi oxirgi=%s",
+                label,
+                last_err or "topilmadi",
+            )
         return False
 
     await _fill_by_selectors(
@@ -3054,8 +3113,9 @@ async def _fill_passenger(page, passenger: dict) -> None:
     # Tug'ilgan sana: ko'p formalarda date input yoki DOB/Birth nomi bilan bo'ladi.
     if birth_date:
         dob = birth_date
-        m = re.match(r"^(\\d{4})-(\\d{2})-(\\d{2})$", birth_date)
+        m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", birth_date)
         dob_dotted = f"{m.group(3)}.{m.group(2)}.{m.group(1)}" if m else birth_date
+        ok_dot = False
         ok_dob = await _fill_by_selectors(
             dob,
             [
@@ -3066,9 +3126,14 @@ async def _fill_passenger(page, passenger: dict) -> None:
                 "input[formcontrolname*='birth' i]",
             ],
             "birth_date",
+            log_fail=False,
         )
         if not ok_dob and dob_dotted != dob:
-            await _fill_by_selectors(
+            logger.info(
+                "[buy][passenger] birth_date qayta_urinish format=KK.OO.YYYY qiymat=%s",
+                _passenger_log_hint("birth_date", dob_dotted),
+            )
+            ok_dot = await _fill_by_selectors(
                 dob_dotted,
                 [
                     "input[name*='birth' i]",
@@ -3076,8 +3141,15 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     "input[placeholder*='туғил' i], input[placeholder*='рожден' i], input[placeholder*='birth' i]",
                     "input[formcontrolname*='birth' i]",
                 ],
-                "birth_date_dotted",
+                "birth_date",
+                log_fail=False,
             )
+        if not ok_dob and not ok_dot:
+            logger.warning(
+                "[buy][passenger] not_filled field=birth_date sabab=ISO_va_kk_oo_yyyy_ishlamadi",
+            )
+    else:
+        logger.info("[buy][passenger] skip field=birth_date sabab=profilda_qiymat_yo'q")
 
     # Jins: select/radio variantlarini qo'llab-quvvatlash.
     if gender in ("male", "female"):
@@ -3118,13 +3190,20 @@ async def _fill_passenger(page, passenger: dict) -> None:
                 gender,
             )
             if js_gender:
-                logger.info("[buy] Passenger filled: gender=%s", gender)
+                logger.info("[buy][passenger] filled field=gender value=%s", gender)
             else:
-                logger.warning("[buy] Passenger field not filled: gender")
-        except Exception:
-            logger.warning("[buy] Passenger gender fill xato")
+                logger.warning(
+                    "[buy][passenger] not_filled field=gender sabab=DOMda_mos_variant_topilmadi qiymat=%s",
+                    gender,
+                )
+        except Exception as ex:
+            logger.warning("[buy][passenger] gender xato: %s", ex)
+    else:
+        logger.info(
+            "[buy][passenger] skip field=gender sabab=profilda_male_female_yo'q yoki_noto'g'ri",
+        )
 
-    await _fill_by_selectors(
+    cit_input_ok = await _fill_by_selectors(
         citizenship,
         [
             "input[name*='citizen' i]",
@@ -3167,9 +3246,20 @@ async def _fill_passenger(page, passenger: dict) -> None:
                 citizenship,
             )
             if ok_c:
-                logger.info("[buy] Passenger filled: citizenship (select)=%s", citizenship)
-        except Exception:
-            pass
+                logger.info("[buy][passenger] filled field=citizenship (select)=%s", citizenship)
+            elif not cit_input_ok:
+                logger.warning(
+                    "[buy][passenger] not_filled field=citizenship sabab=input_va_select_muvaffaqiyatsiz qiymat=%s",
+                    _passenger_log_hint("citizenship", citizenship),
+                )
+            else:
+                logger.info(
+                    "[buy][passenger] citizenship select_topilmadi lekin_input_bilan_to'ldirilgan deb_qoldi",
+                )
+        except Exception as ex:
+            logger.warning("[buy][passenger] citizenship select xato: %s", ex)
+
+    logger.info("[buy][passenger] forma_to'ldirish_bosqichi_yakunlandi")
 
 
 async def _decline_insurance_if_present(page) -> None:

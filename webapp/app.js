@@ -1269,6 +1269,16 @@ async function deleteSubFromList(subId, subKey) {
   }
 }
 
+// Chipta xaridi uchun server bilan bir xil majburiy maydonlar
+const PASSENGER_FIELD_LABELS = {
+  full_name: "To'liq ism",
+  passport: "Passport",
+  phone: "Telefon (+998...)",
+  birth_date: "Tug'ilgan sana",
+  gender: "Jins",
+  citizenship: "Fuqarolik",
+};
+
 // ───────────────────────────── PROFILE ───────────────────────────────────────
 async function goToProfile() {
   showScreen("screenProfile");
@@ -1375,7 +1385,16 @@ async function apiFetch(path, options = {}) {
     let msg = "";
     if (typeof d === "string") msg = d;
     else if (Array.isArray(d)) msg = d.map(e => (e && e.msg) || String(e)).join(" ");
-    else if (d != null) msg = String(d);
+    else if (d != null && typeof d === "object") {
+      if (Array.isArray(d.missing_labels_uz) && d.missing_labels_uz.length) {
+        msg =
+          "Profil to'liq emas: " +
+          d.missing_labels_uz.join(", ") +
+          ". «Profil» bo'limida to'ldiring.";
+      } else {
+        msg = typeof d.message === "string" ? d.message : JSON.stringify(d);
+      }
+    }
     throw new Error(msg || `HTTP ${resp.status}`);
   }
   return data;
@@ -1499,6 +1518,19 @@ async function requestAutoBuyTicket(train) {
   const carType = (train && train.car_type) || "Vagon";
   showLoading(true, "Buyurtma yuborilmoqda...");
   try {
+    let prof;
+    try {
+      prof = await apiFetch(`/api/passenger/${TG_USER_ID}`);
+    } catch {
+      showToast("Avval «Profil» bo'limida yo'lovchi ma'lumotlarini kiriting.");
+      return;
+    }
+    if (!prof.profile_complete) {
+      const keys = prof.missing_fields || [];
+      const lab = keys.map((k) => PASSENGER_FIELD_LABELS[k] || k).join(", ");
+      showToast("Profil to'liq emas: " + lab + ". «Profil» bo'limiga o'ting.");
+      return;
+    }
     const resp = await fetch(`${API_BASE}/api/purchase`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1524,11 +1556,17 @@ async function requestAutoBuyTicket(train) {
     }
     if (!resp.ok) {
       const d = data.detail;
-      const msg = typeof d === "string"
-        ? d
-        : Array.isArray(d)
-          ? d.map(e => e.msg || e).join(" ")
-          : `Xatolik (${resp.status})`;
+      let msg;
+      if (typeof d === "string") msg = d;
+      else if (Array.isArray(d)) msg = d.map((e) => e.msg || e).join(" ");
+      else if (d && typeof d === "object" && Array.isArray(d.missing_labels_uz) && d.missing_labels_uz.length) {
+        msg =
+          "Profil to'liq emas: " +
+          d.missing_labels_uz.join(", ") +
+          ". «Profil» bo'limida to'ldiring.";
+      } else if (d && typeof d === "object" && typeof d.message === "string") {
+        msg = d.message;
+      } else msg = `Xatolik (${resp.status})`;
       showToast(msg);
       return;
     }
