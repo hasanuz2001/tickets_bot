@@ -1417,18 +1417,18 @@ async def _click_buy_for_train(
 
 def _seat_selection_success(before: dict, after: dict) -> bool:
     """_seat_selection_probe() natijalari: joy tanlanganini aniqlash."""
-    sel_up = int(after.get("selected") or 0) > int(before.get("selected") or 0)
     bf = int(before.get("freeSeats") or -1)
     af = int(after.get("freeSeats") or -1)
     free_down = bf >= 0 and af >= 0 and af < bf
-    ba = int(before.get("accentShapes") or 0)
-    aa = int(after.get("accentShapes") or 0)
-    accent_up = aa > ba
-    # Kuchli signal: ogohlantirish matni butun body bo'yicha noto'g'ri bo'lishi mumkin.
-    if sel_up or free_down:
-        return True
-    # Accent: faqat aniq alert/toast ichidagi xato bo'lsa bloklaymiz.
-    if accent_up and not bool(after.get("seatWarnStrict")):
+    b_sp = before.get("schemePicked")
+    a_sp = after.get("schemePicked")
+    if b_sp is not None and a_sp is not None:
+        try:
+            if int(a_sp) > int(b_sp):
+                return True
+        except (TypeError, ValueError):
+            pass
+    if free_down:
         return True
     return False
 
@@ -1552,13 +1552,15 @@ async def _deselect_to_single_seat(page) -> None:
     2–4 ta joy tanlanishi mumkin — ortiqchalarini sxemada qayta bosib bekor qilamiz.
     """
     try:
-        for _round in range(16):
+        last_n: int | None = None
+        stall = 0
+        for _round in range(8):
             res = await page.evaluate(
                 """() => {
                     const scheme =
                         document.querySelector('[class*="scheme" i]') ||
                         document.querySelector('[class*="seat-map" i]');
-                    if (!scheme) return { n: 0, done: true };
+                    if (!scheme) return { n: 0, done: true, cx: null, cy: null, kPrice: 0 };
                     const visible = (el) => {
                         const st = window.getComputedStyle(el);
                         const r = el.getBoundingClientRect();
@@ -1590,41 +1592,65 @@ async def _deselect_to_single_seat(page) -> None:
                         if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
                         return parts;
                     };
-                    const looksSelected = (g) => {
+                    // Hover/ko'kni "tanlangan" deb olmaymiz — faqat yashil/teal + aniq klasslar.
+                    const seatLooksChosen = (g) => {
                         const cls = String(g.className || '').toLowerCase();
-                        const ap = String(
-                            g.getAttribute('aria-pressed') ||
-                                g.getAttribute('aria-selected') ||
-                                ''
-                        ).toLowerCase();
                         if (
-                            cls.includes('selected') ||
-                            cls.includes('active') ||
-                            cls.includes('choice') ||
-                            cls.includes('picked') ||
-                            cls.includes('current') ||
-                            ap === 'true'
+                            /\\b(selected|chosen|picked|is-selected|seat--selected|seat_selected|mat-selected)\\b/.test(
+                                cls
+                            )
                         ) {
                             return true;
                         }
+                        const ap = String(
+                            g.getAttribute('aria-pressed') || g.getAttribute('aria-selected') || ''
+                        ).toLowerCase();
+                        if (ap === 'true') return true;
+                        if (g.getAttribute('data-selected') === 'true') return true;
                         const nodes = g.querySelectorAll('path, rect, circle, polygon');
                         for (const p of nodes) {
-                            const f = String(window.getComputedStyle(p).fill || '');
-                            const s = String(window.getComputedStyle(p).stroke || '');
-                            for (const v of [f, s]) {
+                            for (const v of [
+                                String(window.getComputedStyle(p).fill || ''),
+                                String(window.getComputedStyle(p).stroke || ''),
+                            ]) {
                                 const parts = rgbParts(v);
                                 if (!parts) continue;
                                 const r = parts[0];
                                 const gg = parts[1];
                                 const b = parts[2];
-                                if (b >= 130 && b > r + 18) return true;
-                                if (gg >= 110 && b >= 90 && r < 95) return true;
-                                if (gg >= 140 && r < 90 && b < 110) return true;
-                                if (b >= 120 && gg >= 80 && r < 100) return true;
+                                if (r > 205 && gg > 205 && b > 205) continue;
+                                if (b > 165 && b > gg + 28) continue;
+                                if (gg >= 85 && gg > r + 18 && gg > b + 8) return true;
+                                if (b >= 88 && gg >= 82 && r < 105 && b < 195) return true;
                             }
                         }
                         return false;
                     };
+                    const body = String((document.body && document.body.innerText) || '').replace(
+                        /\\u00a0/g,
+                        ' '
+                    );
+                    const dig = (s) => {
+                        const d = String(s || '').replace(/\\D/g, '');
+                        return d ? parseInt(d, 10) : 0;
+                    };
+                    let unit = 0;
+                    const nu = body.match(/Narxi[^\\d]{0,80}(\\d[\\d\\s]+)/i);
+                    if (nu) unit = dig(nu[1]);
+                    let jami = 0;
+                    const ja = body.match(/(?:Jami|Umumiy|Итого|Умумий)[^\\d]{0,50}(\\d[\\d\\s]+)/i);
+                    if (ja) jami = dig(ja[1]);
+                    if (!jami) {
+                        const hits = Array.from(
+                            body.matchAll(/(\\d{1,3}(?:\\s+\\d{3})+|\\d{5,8})\\s*(?:so|сум)/gi)
+                        ).map((m) => dig(m[1]));
+                        if (hits.length) jami = Math.max(...hits);
+                    }
+                    let kPrice = 0;
+                    if (unit >= 10000 && jami >= unit * 1.49) {
+                        kPrice = Math.round(jami / unit);
+                        if (kPrice < 2 || kPrice > 12) kPrice = 0;
+                    }
                     const selected = [];
                     for (const g of scheme.querySelectorAll('svg g')) {
                         if (!visible(g)) continue;
@@ -1632,15 +1658,16 @@ async def _deselect_to_single_seat(page) -> None:
                         if (!lab) continue;
                         const r = g.getBoundingClientRect();
                         if (r.width > 130 || r.height > 130 || r.width < 4 || r.height < 4) continue;
-                        if (looksSelected(g)) selected.push(g);
+                        if (seatLooksChosen(g)) selected.push({ g, lab: parseInt(lab, 10) || 0 });
                     }
+                    selected.sort((a, b) => a.lab - b.lab);
                     const n = selected.length;
-                    if (n <= 1) return { n, done: true, cx: null, cy: null };
-                    const victim = selected[selected.length - 1];
+                    if (n <= 1) return { n, done: true, cx: null, cy: null, kPrice };
+                    const victim = selected[selected.length - 1].g;
                     const r = victim.getBoundingClientRect();
                     const cx = Math.round(r.left + r.width / 2);
                     const cy = Math.round(r.top + r.height / 2);
-                    return { n, done: false, cx, cy };
+                    return { n, done: false, cx, cy, kPrice };
                 }"""
             )
             if not isinstance(res, dict):
@@ -1650,6 +1677,17 @@ async def _deselect_to_single_seat(page) -> None:
                 if n > 1:
                     logger.info("[buy] Joylar soni: %s (bitta qoldirish uchun sxema aniqlanmadi)", n)
                 break
+            if last_n is not None and n == last_n:
+                stall += 1
+                if stall >= 2:
+                    logger.warning(
+                        "[buy] Ortiqcha joy bekor: %s ta — o'zgarish yo'q, to'xtatildi (noto'g'ri nuqta?)",
+                        n,
+                    )
+                    break
+            else:
+                stall = 0
+            last_n = n
             cx = res.get("cx")
             cy = res.get("cy")
             if cx is not None and cy is not None:
@@ -1663,7 +1701,12 @@ async def _deselect_to_single_seat(page) -> None:
                         }""",
                         [int(cx), int(cy)],
                     )
-            logger.info("[buy] Ortiqcha joy bekor: %s ta tanlangan edi, bittasini qayta bosildi", n)
+            kp = res.get("kPrice")
+            logger.info(
+                "[buy] Ortiqcha joy bekor: %s ta tanlangan (kPrice=%s), bittasini qayta bosildi",
+                n,
+                kp,
+            )
             await page.wait_for_timeout(480)
     except Exception as ex:
         logger.warning("[buy] Ortiqcha joylarni bekor qilish: %s", ex)
@@ -1813,6 +1856,69 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         const st = window.getComputedStyle(el);
                         if (accentPaint(st.fill) || accentPaint(st.stroke)) accentShapes++;
                     });
+                    const rgbPartsSp = (v) => {
+                        if (!v || v === 'none') return null;
+                        const i = v.indexOf('rgb');
+                        if (i < 0) return null;
+                        const o = v.indexOf('(', i);
+                        const cl = v.indexOf(')', o);
+                        if (o < 0 || cl < 0) return null;
+                        const parts = v
+                            .slice(o + 1, cl)
+                            .split(',')
+                            .map((x) => parseInt(String(x).trim(), 10));
+                        if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
+                        return parts;
+                    };
+                    const mergedSeatDigitsSp = (g) => {
+                        const bits = Array.from(g.querySelectorAll('text, tspan'))
+                            .map((e) => String(e.textContent || '').replace(/\\s/g, ''))
+                            .filter(Boolean);
+                        const merged = bits.join('');
+                        return /^\\d{1,3}$/.test(merged) ? merged : '';
+                    };
+                    const seatLooksChosenSp = (g) => {
+                        const c0 = String(g.className || '').toLowerCase();
+                        if (
+                            /\\b(selected|chosen|picked|is-selected|seat--selected|seat_selected|mat-selected)\\b/.test(
+                                c0
+                            )
+                        ) {
+                            return true;
+                        }
+                        const ap = String(
+                            g.getAttribute('aria-pressed') || g.getAttribute('aria-selected') || ''
+                        ).toLowerCase();
+                        if (ap === 'true') return true;
+                        if (g.getAttribute('data-selected') === 'true') return true;
+                        const nodes = g.querySelectorAll('path, rect, circle, polygon');
+                        for (const p of nodes) {
+                            for (const v of [
+                                String(window.getComputedStyle(p).fill || ''),
+                                String(window.getComputedStyle(p).stroke || ''),
+                            ]) {
+                                const parts = rgbPartsSp(v);
+                                if (!parts) continue;
+                                const r = parts[0];
+                                const gg = parts[1];
+                                const b = parts[2];
+                                if (r > 205 && gg > 205 && b > 205) continue;
+                                if (b > 165 && b > gg + 28) continue;
+                                if (gg >= 85 && gg > r + 18 && gg > b + 8) return true;
+                                if (b >= 88 && gg >= 82 && r < 105 && b < 195) return true;
+                            }
+                        }
+                        return false;
+                    };
+                    let schemePicked = 0;
+                    for (const g of scheme.querySelectorAll('svg g')) {
+                        if (!visible(g)) continue;
+                        const lab0 = mergedSeatDigitsSp(g);
+                        if (!lab0) continue;
+                        const rg = g.getBoundingClientRect();
+                        if (rg.width > 130 || rg.height > 130 || rg.width < 4 || rg.height < 4) continue;
+                        if (seatLooksChosenSp(g)) schemePicked++;
+                    }
                     const continueLike = allDoc.find((el) => {
                         const t = String(el.textContent || '').toLowerCase();
                         if (!visible(el)) return false;
@@ -1851,6 +1957,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                     })();
                     return {
                         selected,
+                        schemePicked,
                         continueEnabled: !!continueLike,
                         freeSeats,
                         seatWarn,
@@ -1862,6 +1969,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         except Exception:
             return {
                 "selected": 0,
+                "schemePicked": 0,
                 "continueEnabled": False,
                 "freeSeats": -1,
                 "seatWarn": False,
@@ -1971,8 +2079,8 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         logger.info("[buy] svg_seat_g_targets: %s ta nuqta (tspan birlashtirilgan)", n_g)
         if click_pts:
             random.shuffle(click_pts)
-            # Bir nechta muvaffaqiyatsiz bosish ketma-ket 2–4 ta joyni tanlab qo'yishi mumkin.
-            for p in click_pts[: min(len(click_pts), 10)]:
+            # Bir marta bosish: ketma-ket urinishlar bir nechta joyni tanlab qo'yadi.
+            for p in click_pts[: min(len(click_pts), 1)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2030,7 +2138,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         logger.info("[buy] svg_seat_text_targets: %s ta nuqta", n_txt)
         if label_pts:
             random.shuffle(label_pts)
-            for p in label_pts[: min(len(label_pts), 10)]:
+            for p in label_pts[: min(len(label_pts), 1)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2537,8 +2645,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         if click_points:
             random.shuffle(click_points)
             probe_before = await _seat_selection_probe()
-            # Ko'p urinish ketma-ket ko'p joy tanlaydi — cheklaymiz.
-            for p in click_points[:10]:
+            for p in click_points[:2]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2574,7 +2681,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
 
     # Oxirgi fallback: bitta JS bilan taxminiy bosish o'rniga probe bilan tekshiruvli sikl.
     try:
-        for try_idx in range(10):
+        for try_idx in range(2):
             before_cp = await _seat_selection_probe()
             clicked = await page.evaluate(
                 """() => {
@@ -2670,7 +2777,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             if tc:
                 order = list(range(tc))
                 random.shuffle(order)
-                for idx in order[: min(tc, 3)]:
+                for idx in order[: min(tc, 1)]:
                     before_pl = await _seat_selection_probe()
                     el = tiles.nth(idx)
                     try:
