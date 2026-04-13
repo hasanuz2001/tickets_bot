@@ -1592,7 +1592,23 @@ async def _deselect_to_single_seat(page) -> None:
                         if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
                         return parts;
                     };
-                    // Hover/ko'kni "tanlangan" deb olmaymiz — faqat yashil/teal + aniq klasslar.
+                    // eticket.railway.uz: tanlangan — yashil yoki yorqin ko'k (kulrang bo'sh joy emas: b ≈ r ≈ gg).
+                    const seatPaintPicked = (r, gg, b) => {
+                        if (r > 218 && gg > 218 && b > 218) return false;
+                        if (r + gg + b < 90) return false;
+                        if (r > 185 && gg > 200 && b > 235) return false;
+                        if (gg >= 82 && gg > r + 10 && gg > b + 4) return true;
+                        if (
+                            b >= 115 &&
+                            b > r + 18 &&
+                            b > gg - 28 &&
+                            gg >= 55 &&
+                            r + gg + b < 520
+                        ) {
+                            return true;
+                        }
+                        return false;
+                    };
                     const seatLooksChosen = (g) => {
                         const cls = String(g.className || '').toLowerCase();
                         if (
@@ -1618,10 +1634,7 @@ async def _deselect_to_single_seat(page) -> None:
                                 const r = parts[0];
                                 const gg = parts[1];
                                 const b = parts[2];
-                                if (r > 205 && gg > 205 && b > 205) continue;
-                                if (b > 165 && b > gg + 28) continue;
-                                if (gg >= 85 && gg > r + 18 && gg > b + 8) return true;
-                                if (b >= 88 && gg >= 82 && r < 105 && b < 195) return true;
+                                if (seatPaintPicked(r, gg, b)) return true;
                             }
                         }
                         return false;
@@ -1877,6 +1890,22 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                         const merged = bits.join('');
                         return /^\\d{1,3}$/.test(merged) ? merged : '';
                     };
+                    const seatPaintPickedSp = (r, gg, b) => {
+                        if (r > 218 && gg > 218 && b > 218) return false;
+                        if (r + gg + b < 90) return false;
+                        if (r > 185 && gg > 200 && b > 235) return false;
+                        if (gg >= 82 && gg > r + 10 && gg > b + 4) return true;
+                        if (
+                            b >= 115 &&
+                            b > r + 18 &&
+                            b > gg - 28 &&
+                            gg >= 55 &&
+                            r + gg + b < 520
+                        ) {
+                            return true;
+                        }
+                        return false;
+                    };
                     const seatLooksChosenSp = (g) => {
                         const c0 = String(g.className || '').toLowerCase();
                         if (
@@ -1902,10 +1931,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
                                 const r = parts[0];
                                 const gg = parts[1];
                                 const b = parts[2];
-                                if (r > 205 && gg > 205 && b > 205) continue;
-                                if (b > 165 && b > gg + 28) continue;
-                                if (gg >= 85 && gg > r + 18 && gg > b + 8) return true;
-                                if (b >= 88 && gg >= 82 && r < 105 && b < 195) return true;
+                                if (seatPaintPickedSp(r, gg, b)) return true;
                             }
                         }
                         return false;
@@ -2080,7 +2106,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         if click_pts:
             random.shuffle(click_pts)
             # Bir marta bosish: ketma-ket urinishlar bir nechta joyni tanlab qo'yadi.
-            for p in click_pts[: min(len(click_pts), 1)]:
+            for p in click_pts[: min(len(click_pts), 6)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2138,7 +2164,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
         logger.info("[buy] svg_seat_text_targets: %s ta nuqta", n_txt)
         if label_pts:
             random.shuffle(label_pts)
-            for p in label_pts[: min(len(label_pts), 1)]:
+            for p in label_pts[: min(len(label_pts), 6)]:
                 x = int(p.get("x") or 0)
                 y = int(p.get("y") or 0)
                 if x <= 0 or y <= 0:
@@ -2777,7 +2803,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             if tc:
                 order = list(range(tc))
                 random.shuffle(order)
-                for idx in order[: min(tc, 1)]:
+                for idx in order[: min(tc, 4)]:
                     before_pl = await _seat_selection_probe()
                     el = tiles.nth(idx)
                     try:
