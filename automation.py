@@ -1442,7 +1442,19 @@ async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
     try:
         res = await page.evaluate(
             """() => {
-                const reOne = /(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/i;
+                // eticket.uz: «soʻmdan» — o va m orasida U+02BB / U+2019 va hokazo
+                const rePrice = /(\\d[\\d\\s]{4,})\\s*(?:so[\\u0027\\u2018\\u2019\\u02BB\\u02BC\\u0060\\u00B4]*m(?:dan)?|сум\\.?)/gi;
+                const pricesInText = (raw) => {
+                    const s = String(raw || '').replace(/\\s+/g, ' ');
+                    const out = [];
+                    let m;
+                    rePrice.lastIndex = 0;
+                    while ((m = rePrice.exec(s)) !== null) {
+                        const p = parseInt(String(m[1]).replace(/\\D/g, ''), 10);
+                        if (Number.isFinite(p) && p >= 12000 && p <= 900000) out.push(p);
+                    }
+                    return out;
+                };
                 const visible = (el) => {
                     const st = window.getComputedStyle(el);
                     const r = el.getBoundingClientRect();
@@ -1452,41 +1464,46 @@ async def _click_cheapest_wagon_tab_if_present(page) -> int | None:
                     return true;
                 };
                 const maxTop = Math.min(window.innerHeight * 0.58, 520);
-                const nodes = document.querySelectorAll(
-                    '[role="tab"], [role="tablist"] [role="tab"], button, a, label, li, span, div, ' +
-                    '[class*="tab-label"], [class*="mat-mdc-tab"], [class*="mdc-tab"], ' +
-                    '[class*="swiper-slide"], [class*="chip"], [class*="wagon"], [class*="vagon"], ' +
-                    '[class*="car-"], [tabindex="0"]'
-                );
-                const infos = [];
-                for (const el of nodes) {
-                    if (!visible(el)) continue;
-                    const r = el.getBoundingClientRect();
-                    if (r.top > maxTop) continue;
-                    const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
-                    if (t.length < 8 || t.length > 420) continue;
-                    const low = t.toLowerCase();
-                    if (/jami|умум|итого|total|to'lov|оплат/i.test(low) && t.length > 80) continue;
-                    const allM = Array.from(t.matchAll(/(\\d[\\d\\s]{4,})\\s*(?:so[''`ʼ]m(?:dan)?|сум\\.?)/gi));
-                    const prices = [];
-                    for (const mm of allM) {
-                        const p = parseInt(String(mm[1]).replace(/\\D/g, ''), 10);
-                        if (Number.isFinite(p) && p >= 12000 && p <= 900000) prices.push(p);
+                const pushInfos = (nodeList) => {
+                    const arr = [];
+                    for (const el of nodeList) {
+                        if (!visible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.top > maxTop) continue;
+                        const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+                        if (t.length < 6 || t.length > 500) continue;
+                        const low = t.toLowerCase();
+                        if (/jami|умум|итого|total|to'lov|оплат/i.test(low) && t.length > 120) continue;
+                        const prices = pricesInText(t);
+                        if (!prices.length) continue;
+                        const price = Math.min(...prices);
+                        const role = String(el.getAttribute('role') || '');
+                        const cls0 = String(el.className || '');
+                        const tabish =
+                            role === 'tab' ||
+                            /swiper-slide|mat-mdc-tab|mdc-tab|tab-label/i.test(cls0);
+                        arr.push({
+                            price,
+                            el,
+                            tlen: t.length,
+                            t: t.slice(0, 100),
+                            top: r.top,
+                            area: r.width * r.height,
+                            tabish,
+                        });
                     }
-                    if (!prices.length) continue;
-                    const price = Math.min(...prices);
-                    const role = String(el.getAttribute('role') || '');
-                    const cls0 = String(el.className || '');
-                    const tabish = role === 'tab' || /swiper-slide|mat-mdc-tab|mdc-tab|tab-label/i.test(cls0);
-                    infos.push({
-                        price,
-                        el,
-                        tlen: t.length,
-                        t: t.slice(0, 100),
-                        top: r.top,
-                        area: r.width * r.height,
-                        tabish,
-                    });
+                    return arr;
+                };
+                const tabNodes = document.querySelectorAll(
+                    '[role="tab"], [class*="swiper-slide"], [class*="mat-mdc-tab"], [class*="mdc-tab"]'
+                );
+                let infos = pushInfos(tabNodes);
+                if (!infos.length) {
+                    const wide = document.querySelectorAll(
+                        '[role="tablist"] [role="tab"], button, a, label, li, span, div, ' +
+                        '[class*="tab-label"], [class*="chip"], [class*="vagon"], [class*="car-"], [tabindex="0"]'
+                    );
+                    infos = pushInfos(wide);
                 }
                 if (!infos.length) return { ok: false, n: 0 };
                 let minP = Infinity;
@@ -1535,7 +1552,7 @@ async def _deselect_to_single_seat(page) -> None:
     2–4 ta joy tanlanishi mumkin — ortiqchalarini sxemada qayta bosib bekor qilamiz.
     """
     try:
-        for _round in range(12):
+        for _round in range(16):
             res = await page.evaluate(
                 """() => {
                     const scheme =
@@ -1559,6 +1576,20 @@ async def _deselect_to_single_seat(page) -> None:
                         const merged = bits.join('');
                         return /^\\d{1,3}$/.test(merged) ? merged : '';
                     };
+                    const rgbParts = (v) => {
+                        if (!v || v === 'none') return null;
+                        const i = v.indexOf('rgb');
+                        if (i < 0) return null;
+                        const o = v.indexOf('(', i);
+                        const cl = v.indexOf(')', o);
+                        if (o < 0 || cl < 0) return null;
+                        const parts = v
+                            .slice(o + 1, cl)
+                            .split(',')
+                            .map((x) => parseInt(String(x).trim(), 10));
+                        if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
+                        return parts;
+                    };
                     const looksSelected = (g) => {
                         const cls = String(g.className || '').toLowerCase();
                         const ap = String(
@@ -1576,30 +1607,23 @@ async def _deselect_to_single_seat(page) -> None:
                         ) {
                             return true;
                         }
-                        const p = g.querySelector('path, rect, circle, polygon');
-                        if (!p) return false;
-                        const f = String(window.getComputedStyle(p).fill || '');
-                        const s = String(window.getComputedStyle(p).stroke || '');
-                        const paint = (v) => {
-                            if (!v || v === 'none') return false;
-                            const i = v.indexOf('rgb');
-                            if (i < 0) return false;
-                            const o = v.indexOf('(', i);
-                            const cl = v.indexOf(')', o);
-                            if (o < 0 || cl < 0) return false;
-                            const parts = v
-                                .slice(o + 1, cl)
-                                .split(',')
-                                .map((x) => parseInt(String(x).trim(), 10));
-                            if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return false;
-                            const r = parts[0];
-                            const gg = parts[1];
-                            const b = parts[2];
-                            if (b >= 130 && b > r + 18) return true;
-                            if (gg >= 110 && b >= 90 && r < 95) return true;
-                            return false;
-                        };
-                        return paint(f) || paint(s);
+                        const nodes = g.querySelectorAll('path, rect, circle, polygon');
+                        for (const p of nodes) {
+                            const f = String(window.getComputedStyle(p).fill || '');
+                            const s = String(window.getComputedStyle(p).stroke || '');
+                            for (const v of [f, s]) {
+                                const parts = rgbParts(v);
+                                if (!parts) continue;
+                                const r = parts[0];
+                                const gg = parts[1];
+                                const b = parts[2];
+                                if (b >= 130 && b > r + 18) return true;
+                                if (gg >= 110 && b >= 90 && r < 95) return true;
+                                if (gg >= 140 && r < 90 && b < 110) return true;
+                                if (b >= 120 && gg >= 80 && r < 100) return true;
+                            }
+                        }
+                        return false;
                     };
                     const selected = [];
                     for (const g of scheme.querySelectorAll('svg g')) {
@@ -1611,21 +1635,12 @@ async def _deselect_to_single_seat(page) -> None:
                         if (looksSelected(g)) selected.push(g);
                     }
                     const n = selected.length;
-                    if (n <= 1) return { n, done: true };
+                    if (n <= 1) return { n, done: true, cx: null, cy: null };
                     const victim = selected[selected.length - 1];
                     const r = victim.getBoundingClientRect();
-                    const x = r.left + r.width / 2;
-                    const y = r.top + r.height / 2;
-                    try {
-                        victim.dispatchEvent(
-                            new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
-                        );
-                    } catch (e) {
-                        try {
-                            victim.click();
-                        } catch (e2) {}
-                    }
-                    return { n, done: false, x, y };
+                    const cx = Math.round(r.left + r.width / 2);
+                    const cy = Math.round(r.top + r.height / 2);
+                    return { n, done: false, cx, cy };
                 }"""
             )
             if not isinstance(res, dict):
@@ -1635,8 +1650,21 @@ async def _deselect_to_single_seat(page) -> None:
                 if n > 1:
                     logger.info("[buy] Joylar soni: %s (bitta qoldirish uchun sxema aniqlanmadi)", n)
                 break
+            cx = res.get("cx")
+            cy = res.get("cy")
+            if cx is not None and cy is not None:
+                try:
+                    await page.mouse.click(int(cx), int(cy))
+                except Exception:
+                    await page.evaluate(
+                        """([x, y]) => {
+                            const el = document.elementFromPoint(x, y);
+                            if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }""",
+                        [int(cx), int(cy)],
+                    )
             logger.info("[buy] Ortiqcha joy bekor: %s ta tanlangan edi, bittasini qayta bosildi", n)
-            await page.wait_for_timeout(420)
+            await page.wait_for_timeout(480)
     except Exception as ex:
         logger.warning("[buy] Ortiqcha joylarni bekor qilish: %s", ex)
 
@@ -1646,7 +1674,11 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
 
     def _parse_price_sum(raw: str) -> int | None:
         txt = (raw or "").replace("\u00a0", " ")
-        m = re.findall(r"(\d[\d\s]{2,})\s*(?:so['`ʼ']m(?:dan)?|сум\.?)", txt, re.I)
+        m = re.findall(
+            r"(\d[\d\s]{2,})\s*(?:so[\u0027\u2018\u2019\u02BB\u02BC\u0060\u00B4]*m(?:dan)?|сум\.?)",
+            txt,
+            re.I,
+        )
         if not m:
             return None
         digits = re.sub(r"\D", "", m[0] or "")
@@ -2638,7 +2670,7 @@ async def _pick_car_and_seat(page, car_type: str) -> None:
             if tc:
                 order = list(range(tc))
                 random.shuffle(order)
-                for idx in order[: min(tc, 15)]:
+                for idx in order[: min(tc, 3)]:
                     before_pl = await _seat_selection_probe()
                     el = tiles.nth(idx)
                     try:
@@ -2685,9 +2717,57 @@ async def _fill_passenger(page, passenger: dict) -> None:
         bool(citizenship),
     )
 
+    async def _reveal_passenger_form() -> None:
+        """Angular mat-expansion: panel yopiq bo'lsa inputlar visible: 0 bo'ladi."""
+        try:
+            await page.evaluate(
+                """() => {
+                    const heads = document.querySelectorAll(
+                        'mat-expansion-panel-header, .mat-expansion-panel-header, [class*="expansion-panel-header" i]'
+                    );
+                    heads.forEach((h) => {
+                        try {
+                            h.scrollIntoView({ block: 'nearest', inline: 'center' });
+                            h.click();
+                        } catch (e) {}
+                    });
+                }"""
+            )
+        except Exception:
+            pass
+        try:
+            await page.evaluate(
+                """() => {
+                    const all = document.querySelectorAll('h2, h3, h4, span, div, p, button');
+                    for (const el of all) {
+                        const t = String(el.textContent || '');
+                        if (
+                            /yo['\u2019]?lovchilar/i.test(t) &&
+                            /ma['\u2019]?lumot/i.test(t) &&
+                            /to['\u2019]?ldir/i.test(t)
+                        ) {
+                            try {
+                                el.scrollIntoView({ block: 'center', inline: 'center' });
+                                el.click();
+                            } catch (e) {}
+                            return;
+                        }
+                    }
+                }"""
+            )
+        except Exception:
+            pass
+        try:
+            await page.keyboard.press("End")
+            await page.wait_for_timeout(500)
+        except Exception:
+            pass
+
     async def _open_passenger_block_if_needed() -> None:
         # Ba'zi sahifalarda yo'lovchi forma "kiritish" tugmasi bosilgandan keyin ochiladi.
         targets = (
+            "Yo'lovchilar haqidagi ma'lumotlarni to'ldiring",
+            "ma'lumotlarni to'ldiring",
             "Yo'lovchilar haqida ma'lumot",
             "ma'lumotlaringizni kiriting",
             "ma'lumot kirit",
@@ -2744,7 +2824,10 @@ async def _fill_passenger(page, passenger: dict) -> None:
         except Exception as ex:
             logger.warning("[buy] passenger_fields_diag xato: %s", ex)
 
+    await _reveal_passenger_form()
     await _open_passenger_block_if_needed()
+    await page.wait_for_timeout(600)
+    await _deselect_to_single_seat(page)
     await _diag_passenger_fields()
 
     async def _fill_by_selectors(value: str, selectors: list[str], label: str) -> bool:
@@ -2792,6 +2875,7 @@ async def _fill_passenger(page, passenger: dict) -> None:
     await _fill_by_selectors(
         name,
         [
+            "input[placeholder*='Familiya' i]",
             "input[placeholder*='ФИО' i]",
             "input[placeholder*='Имя' i]",
             "input[placeholder*='ism' i]",
