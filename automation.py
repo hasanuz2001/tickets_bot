@@ -1554,13 +1554,16 @@ async def _deselect_to_single_seat(page) -> None:
     try:
         last_n: int | None = None
         stall = 0
-        for _round in range(8):
+        for _round in range(14):
+            victim_from_end = min(_round, 8)
             res = await page.evaluate(
-                """() => {
+                """(victimFromEnd) => {
                     const scheme =
                         document.querySelector('[class*="scheme" i]') ||
                         document.querySelector('[class*="seat-map" i]');
-                    if (!scheme) return { n: 0, done: true, cx: null, cy: null, kPrice: 0 };
+                    if (!scheme) {
+                        return { n: 0, nDOM: 0, nGreen: 0, done: true, cx: null, cy: null, kPrice: 0 };
+                    }
                     const visible = (el) => {
                         const st = window.getComputedStyle(el);
                         const r = el.getBoundingClientRect();
@@ -1592,12 +1595,18 @@ async def _deselect_to_single_seat(page) -> None:
                         if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return null;
                         return parts;
                     };
-                    // eticket.railway.uz: tanlangan — yashil yoki yorqin ko'k (kulrang bo'sh joy emas: b ≈ r ≈ gg).
+                    // Yashil — haqiqiy tanlangan; ko'k — ko'pincha «mavjud» aksent, DOMda 2↔4 tebranish beradi.
+                    const seatPaintGreen = (r, gg, b) => {
+                        if (r > 218 && gg > 218 && b > 218) return false;
+                        if (r + gg + b < 90) return false;
+                        if (r > 185 && gg > 200 && b > 235) return false;
+                        return gg >= 82 && gg > r + 10 && gg > b + 4;
+                    };
                     const seatPaintPicked = (r, gg, b) => {
                         if (r > 218 && gg > 218 && b > 218) return false;
                         if (r + gg + b < 90) return false;
                         if (r > 185 && gg > 200 && b > 235) return false;
-                        if (gg >= 82 && gg > r + 10 && gg > b + 4) return true;
+                        if (seatPaintGreen(r, gg, b)) return true;
                         if (
                             b >= 115 &&
                             b > r + 18 &&
@@ -1609,7 +1618,8 @@ async def _deselect_to_single_seat(page) -> None:
                         }
                         return false;
                     };
-                    const seatLooksChosen = (g) => {
+                    const seatLooksByPaint = (g, greenOnly) => {
+                        const paintFn = greenOnly ? seatPaintGreen : seatPaintPicked;
                         const cls = String(g.className || '').toLowerCase();
                         if (
                             /\\b(selected|chosen|picked|is-selected|seat--selected|seat_selected|mat-selected)\\b/.test(
@@ -1634,7 +1644,7 @@ async def _deselect_to_single_seat(page) -> None:
                                 const r = parts[0];
                                 const gg = parts[1];
                                 const b = parts[2];
-                                if (seatPaintPicked(r, gg, b)) return true;
+                                if (paintFn(r, gg, b)) return true;
                             }
                         }
                         return false;
@@ -1650,42 +1660,79 @@ async def _deselect_to_single_seat(page) -> None:
                     let unit = 0;
                     const nu = body.match(/Narxi[^\\d]{0,80}(\\d[\\d\\s]+)/i);
                     if (nu) unit = dig(nu[1]);
+                    if (!unit) {
+                        const u2 = body.match(
+                            /(\\d[\\d\\s]+)\\s*so[\\u0027\\u2019\\u02BB\\u0060]?mdan/gi
+                        );
+                        if (u2) unit = dig(u2[1]);
+                    }
                     let jami = 0;
-                    const ja = body.match(/(?:Jami|Umumiy|Итого|Умумий)[^\\d]{0,50}(\\d[\\d\\s]+)/i);
+                    const ja = body.match(/(?:Jami|Umumiy|Итого|Умумий|Жами)[^\\d]{0,80}(\\d[\\d\\s]+)/i);
                     if (ja) jami = dig(ja[1]);
                     if (!jami) {
                         const hits = Array.from(
                             body.matchAll(/(\\d{1,3}(?:\\s+\\d{3})+|\\d{5,8})\\s*(?:so|сум)/gi)
-                        ).map((m) => dig(m[1]));
+                        )
+                            .map((m) => dig(m[1]))
+                            .filter((v) => v >= 15000 && v <= 20000000);
                         if (hits.length) jami = Math.max(...hits);
                     }
                     let kPrice = 0;
-                    if (unit >= 10000 && jami >= unit * 1.49) {
+                    if (unit >= 10000 && jami >= unit * 1.25) {
                         kPrice = Math.round(jami / unit);
                         if (kPrice < 2 || kPrice > 12) kPrice = 0;
                     }
+                    const pushChosen = (arr, g, lab, greenOnly) => {
+                        if (seatLooksByPaint(g, greenOnly)) arr.push({ g, lab: parseInt(lab, 10) || 0 });
+                    };
                     const selected = [];
+                    const selectedGreen = [];
                     for (const g of scheme.querySelectorAll('svg g')) {
                         if (!visible(g)) continue;
                         const lab = mergedSeatDigits(g);
                         if (!lab) continue;
                         const r = g.getBoundingClientRect();
                         if (r.width > 130 || r.height > 130 || r.width < 4 || r.height < 4) continue;
-                        if (seatLooksChosen(g)) selected.push({ g, lab: parseInt(lab, 10) || 0 });
+                        pushChosen(selected, g, lab, false);
+                        pushChosen(selectedGreen, g, lab, true);
                     }
                     selected.sort((a, b) => a.lab - b.lab);
-                    const n = selected.length;
-                    if (n <= 1) return { n, done: true, cx: null, cy: null, kPrice };
-                    const victim = selected[selected.length - 1].g;
+                    selectedGreen.sort((a, b) => a.lab - b.lab);
+                    let pool = selectedGreen.length >= 2 ? selectedGreen : selected;
+                    const nDOM = selected.length;
+                    const nGreen = selectedGreen.length;
+                    let n = pool.length;
+                    if (kPrice >= 2 && kPrice <= 12 && nDOM > kPrice && selectedGreen.length >= kPrice) {
+                        pool = selectedGreen;
+                        n = pool.length;
+                    }
+                    if (kPrice === 1 && n <= 1) {
+                        return { n, nDOM, nGreen, done: true, cx: null, cy: null, kPrice };
+                    }
+                    if (n <= 1 && (kPrice <= 1 || kPrice === 0)) {
+                        return { n, nDOM, nGreen, done: true, cx: null, cy: null, kPrice };
+                    }
+                    if (pool.length < 2) {
+                        pool = selected;
+                        n = pool.length;
+                    }
+                    if (pool.length <= 1) {
+                        return { n, nDOM, nGreen, done: true, cx: null, cy: null, kPrice };
+                    }
+                    const k = Math.min(victimFromEnd, pool.length - 1);
+                    const victim = pool[pool.length - 1 - k].g;
                     const r = victim.getBoundingClientRect();
                     const cx = Math.round(r.left + r.width / 2);
                     const cy = Math.round(r.top + r.height / 2);
-                    return { n, done: false, cx, cy, kPrice };
-                }"""
+                    return { n, nDOM, nGreen, done: false, cx, cy, kPrice };
+                }""",
+                victim_from_end,
             )
             if not isinstance(res, dict):
                 break
             n = int(res.get("n") or 0)
+            n_dom = int(res.get("nDOM") or n)
+            n_green = int(res.get("nGreen") or 0)
             if res.get("done") or n <= 1:
                 if n > 1:
                     logger.info("[buy] Joylar soni: %s (bitta qoldirish uchun sxema aniqlanmadi)", n)
@@ -1694,8 +1741,10 @@ async def _deselect_to_single_seat(page) -> None:
                 stall += 1
                 if stall >= 2:
                     logger.warning(
-                        "[buy] Ortiqcha joy bekor: %s ta — o'zgarish yo'q, to'xtatildi (noto'g'ri nuqta?)",
+                        "[buy] Ortiqcha joy bekor: pool=%s (yashil=%s, yumshoq=%s) — o'zgarish yo'q, to'xtatildi",
                         n,
+                        n_green,
+                        n_dom,
                     )
                     break
             else:
@@ -1716,8 +1765,10 @@ async def _deselect_to_single_seat(page) -> None:
                     )
             kp = res.get("kPrice")
             logger.info(
-                "[buy] Ortiqcha joy bekor: %s ta tanlangan (kPrice=%s), bittasini qayta bosildi",
+                "[buy] Ortiqcha joy bekor: pool=%s (yashil=%s, yumshoq=%s) kPrice=%s, bitta bekor",
                 n,
+                n_green,
+                n_dom,
                 kp,
             )
             await page.wait_for_timeout(480)
@@ -3220,8 +3271,8 @@ async def _fill_passenger(page, passenger: dict) -> None:
                     const code = String(raw || '').trim().toUpperCase();
                     if (!code) return false;
                     const extra = [];
-                    if (code === 'UZ' || code.includes('O\'ZBEK') || code.includes('УЗБ')) {
-                        extra.push('UZB','860','UZBEK','O\'ZBEKISTON','ЎЗБ','УЗБЕК');
+                    if (code === 'UZ' || code.includes("O'ZBEK") || code.includes('УЗБ')) {
+                        extra.push('UZB','860','UZBEK',"O'ZBEKISTON",'ЎЗБ','УЗБЕК');
                     }
                     const needles = [code, ...extra].map((s) => String(s).toLowerCase());
                     const hitOpt = (o) => {
